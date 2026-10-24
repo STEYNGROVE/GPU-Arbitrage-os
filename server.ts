@@ -914,7 +914,7 @@ async function startServer() {
           totalMasterEquityUsd: binanceAcct.totalEquityUsd + binanceAcct.availableMarginUsd,
           usdtMasterSpotBalance: binanceAcct.usdtBalance,
           crossMarginInstitutionalLine: binanceAcct.availableMarginUsd,
-          realizedArbitrageProfitPoolUsd: ledgerBreakdown.capitalAccount.retainedEarningsUsd,
+          realizedArbitrageProfitPoolUsd: ledgerBreakdown.gaapBalanceSheet.revenueMetrics.realisedProfitUsd,
           activeLeaseCount: 0,
         },
         communications: {
@@ -939,13 +939,13 @@ async function startServer() {
           scrapeHeight: gitSyncStatus.totalSyncCyclesCompleted || 1,
           lastSyncAt: gitSyncStatus.lastSyncedAt,
           upstreamRepo: gitSyncStatus.upstreamRepo,
-          commitSha: gitSyncStatus.lastKnownSha,
+          commitSha: gitSyncStatus.latestRemoteCommitSha || gitSyncStatus.lastLocalCommitSha || 'HEAD',
         },
         recentSystemEvents: [
           `[BINANCE_REST_API] Live spot balance query: $${binanceAcct.usdtBalance.toFixed(2)} USDT (UID: ${binanceAcct.binanceUid}).`,
           `[AUDIT_LEDGER] Double-entry balance sheet holds variance at exactly $${ledgerBreakdown.reconciliationAudit.varianceUsd.toFixed(2)} USD.`,
           `[SECURITY] Trusted IP Guard enforcing zero auto-trust perimeter in ENFORCED mode.`,
-          `[GITHUB_SYNC] Upstream repository https://github.com/${gitSyncStatus.upstreamRepo} synchronized (Commit: ${gitSyncStatus.lastKnownSha?.substring(0, 7) || 'HEAD'}).`,
+          `[GITHUB_SYNC] Upstream repository https://github.com/${gitSyncStatus.upstreamRepo} synchronized (Commit: ${(gitSyncStatus.latestRemoteCommitSha || gitSyncStatus.lastLocalCommitSha || 'HEAD').slice(0, 7)}).`,
         ],
       };
 
@@ -957,12 +957,14 @@ async function startServer() {
 
   // Real System Execution Logs Endpoint
   app.get('/api/system/real-logs', (_req: Request, res: Response) => {
-    const gitLogs = githubSyncService.getLogs();
-    const secLogs = trustedIpGuard.getAccessLogs();
+    const gitStatus = githubSyncService.getStatus();
+    const secStatus = trustedIpGuard.getStatus();
+    const gitLogs = gitStatus.recentLogs || [];
+    const secLogs = secStatus.recentAccessLogs || [];
     const ledger = financialLedger.getAllEntries();
 
     const combinedLogs = [
-      ...secLogs.map((s, idx) => ({
+      ...secLogs.map((s: any, idx: number) => ({
         id: `SEC-${idx}-${s.timestamp}`,
         timestamp: s.timestamp.split('T')[1]?.slice(0, 8) || s.timestamp,
         level: s.status === 'ALLOWED' ? ('SYSTEM_INFO' as const) : ('SPREAD_ALERT' as const),
@@ -970,7 +972,7 @@ async function startServer() {
         message: `${s.method} ${s.path} - Client IP: ${s.ip} (${s.status}) - ${s.reason}`,
         latencyMs: 1.2,
       })),
-      ...gitLogs.map((g, idx) => ({
+      ...gitLogs.map((g: any, idx: number) => ({
         id: `GIT-${idx}-${g.timestamp}`,
         timestamp: g.timestamp.split('T')[1]?.slice(0, 8) || g.timestamp,
         level: 'FLEET_SYNC' as const,
@@ -978,7 +980,7 @@ async function startServer() {
         message: `[${g.action}] ${g.details}`,
         latencyMs: 14.5,
       })),
-      ...ledger.map((l, idx) => ({
+      ...ledger.map((l: any, idx: number) => ({
         id: `LEDGER-${idx}-${l.timestamp}`,
         timestamp: l.timestamp.split('T')[1]?.slice(0, 8) || l.timestamp,
         level: 'ORDER_EXEC' as const,
