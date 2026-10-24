@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { ExecutionLog } from '../types/arbitrage';
+import { InfrastructureTelemetryPanel } from './InfrastructureTelemetryPanel';
 import {
   Terminal,
   Search,
@@ -60,7 +61,10 @@ export const TelemetryLogs: React.FC<TelemetryLogsProps> = ({
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      {/* Infrastructure Telemetry & Communications Console */}
+      <InfrastructureTelemetryPanel onRefresh={onAddSimulatedLog} />
+
       {/* Log Toolbar */}
       <div className="p-4 bg-slate-900/80 border border-slate-800 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2">
