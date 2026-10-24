@@ -18,6 +18,7 @@ export interface BinanceAccountStatus {
   usdcBalance: number;
   btcBalance: number;
   ethBalance: number;
+  bnbBalance: number;
   totalEquityUsd: number;
   availableMarginUsd: number;
   autoSweepProfits: boolean;
@@ -90,6 +91,7 @@ class JakeGroveCfoService {
   private usdcBalance: number = 0.0;
   private btcBalance: number = 0.0;
   private ethBalance: number = 0.0;
+  private bnbBalance: number = 0.0;
   private availableMarginUsd: number = 0.0;
   private onBalanceChangeListeners: Array<(balances: any) => void> = [];
 
@@ -172,11 +174,13 @@ class JakeGroveCfoService {
         const usdcObj = balances.find((b: any) => b.asset === 'USDC');
         const btcObj = balances.find((b: any) => b.asset === 'BTC');
         const ethObj = balances.find((b: any) => b.asset === 'ETH');
+        const bnbObj = balances.find((b: any) => b.asset === 'BNB');
 
         this.usdtBalance = usdtObj ? parseFloat(usdtObj.free) : 0;
         this.usdcBalance = usdcObj ? parseFloat(usdcObj.free) : 0;
         this.btcBalance = btcObj ? parseFloat(btcObj.free) : 0;
         this.ethBalance = ethObj ? parseFloat(ethObj.free) : 0;
+        this.bnbBalance = bnbObj ? parseFloat(bnbObj.free) : 0;
         this.notifyBalanceChange();
 
         const totalEquity =
@@ -200,6 +204,7 @@ class JakeGroveCfoService {
           usdcBalance: Number(this.usdcBalance.toFixed(2)),
           btcBalance: Number(this.btcBalance.toFixed(4)),
           ethBalance: Number(this.ethBalance.toFixed(4)),
+          bnbBalance: Number(this.bnbBalance.toFixed(4)),
           totalEquityUsd: Number(totalEquity.toFixed(2)),
           availableMarginUsd: Number(this.availableMarginUsd.toFixed(2)),
           autoSweepProfits: this.autoSweepEnabled,

@@ -121,6 +121,7 @@ export interface BinanceAccount {
   usdcBalance: number;
   btcBalance: number;
   ethBalance: number;
+  bnbBalance?: number;
   totalEquityUsd: number;
   availableMarginUsd: number;
   autoSweepProfits: boolean;
