@@ -131,6 +131,7 @@ export default function App() {
   // Initial load from Persistent Complete Memory on Mount
   useEffect(() => {
     rehydrateFromMemory();
+    fetchRealSystemLogs();
 
     fetch('/api/binance/account')
       .then((res) => res.json())
@@ -172,22 +173,22 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
-  // Real-time ticking effect: slightly tick contract PnL & spot prices & Binance hedge mark prices
-  useEffect(() => {
-    const interval = setInterval(() => {
-      // 1. Increment accrued PnL on active contracts
-      setActiveContracts((prev) =>
-        prev.map((contract) => {
-          if (contract.status !== 'ACTIVE_ROUTING') return contract;
-          const increment = (contract.netSpreadPerHour * contract.nodeCount) / 1200;
-          return {
-            ...contract,
-            totalAccruedPnL: Number((contract.totalAccruedPnL + increment).toFixed(2)),
-          };
-        })
-      );
+  const fetchRealSystemLogs = () => {
+    fetch('/api/system/real-logs')
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setLogs(data);
+        }
+      })
+      .catch(() => {});
+  };
 
-      // 2. Fetch live DePIN token prices from Binance Live API feed
+  // Real-time synchronization: fetch live DePIN token prices and live Binance exchange balances
+  useEffect(() => {
+    fetchRealSystemLogs();
+    const interval = setInterval(() => {
+      // 1. Fetch live DePIN token prices from Binance Live API feed
       fetch('/api/binance/depin-tickers')
         .then((res) => res.json())
         .then((tickers) => {
@@ -798,18 +799,8 @@ export default function App() {
     });
   };
 
-  const handleAddSimulatedLog = () => {
-    const now = new Date();
-    const timeStr = now.toTimeString().split(' ')[0];
-    const newLog: ExecutionLog = {
-      id: `log-${Date.now()}`,
-      timestamp: timeStr,
-      level: 'SPREAD_ALERT',
-      service: `yield_optimizer_fleet#${String((logs.length % 50) + 1).padStart(2, '0')}`,
-      message: `Manual Probe Alert: Spot spread on 8x H200 SXM (FluidStack Iceland -> Frankfurt) increased to +$1.85/hr (87.2% APR).`,
-      latencyMs: 2.4,
-    };
-    setLogs((prev) => [newLog, ...prev]);
+  const handleRefreshRealLogs = () => {
+    fetchRealSystemLogs();
   };
 
   return (
@@ -901,7 +892,7 @@ export default function App() {
           <TelemetryLogs
             logs={logs}
             onClearLogs={() => setLogs([])}
-            onAddSimulatedLog={handleAddSimulatedLog}
+            onAddSimulatedLog={handleRefreshRealLogs}
           />
         )}
       </main>
