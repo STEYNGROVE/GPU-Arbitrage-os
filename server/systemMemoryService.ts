@@ -83,6 +83,10 @@ class SystemMemoryService {
         const parsed = JSON.parse(fileContent);
 
         if (parsed && typeof parsed === 'object') {
+          if (parsed.bridgeConfig) {
+            delete parsed.bridgeConfig.bridgeToken;
+            delete parsed.bridgeConfig.ownerOverrideKey;
+          }
           this.currentState = parsed;
           this.bootCount = (Number(parsed.bootCount) || 1) + 1;
           this.currentState.bootCount = this.bootCount;
@@ -410,6 +414,15 @@ class SystemMemoryService {
         lastSavedAt: this.lastPersistTimestamp,
         bootCount: this.bootCount,
       };
+
+      if (this.currentState.bridgeConfig) {
+        delete this.currentState.bridgeConfig.bridgeToken;
+        delete this.currentState.bridgeConfig.ownerOverrideKey;
+      }
+      if ((payload as any).bridgeConfig) {
+        delete (payload as any).bridgeConfig.bridgeToken;
+        delete (payload as any).bridgeConfig.ownerOverrideKey;
+      }
 
       const serialized = JSON.stringify(payload, null, 2);
       const tempPath = `${MEMORY_FILE_PATH}.tmp`;
