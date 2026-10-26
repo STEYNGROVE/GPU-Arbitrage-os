@@ -22,6 +22,8 @@ export interface BinanceAccountStatus {
   totalEquityUsd: number;
   availableMarginUsd: number;
   autoSweepProfits: boolean;
+  sweptProfitsUsd?: number;
+  rawSpotBalance?: number;
   lastSyncAt: string;
   permissions: string[];
   outboundEgressIp: string;
@@ -92,6 +94,7 @@ class JakeGroveCfoService {
   private btcBalance: number = 0.0;
   private ethBalance: number = 0.0;
   private bnbBalance: number = 0.0;
+  private sweptProfitsUsd: number = 0.0;
   private availableMarginUsd: number = 0.0;
   private onBalanceChangeListeners: Array<(balances: any) => void> = [];
 
@@ -200,12 +203,14 @@ class JakeGroveCfoService {
           vipTier: 'VIP Tier Authenticated',
           apiKeyMasked: `${config.binance.apiKey.substring(0, 6)}••••••••${config.binance.apiKey.slice(-4)}`,
           pingLatencyMs: Math.max(1, this.lastPingMs),
-          usdtBalance: Number(this.usdtBalance.toFixed(2)),
+          rawSpotBalance: Number(this.usdtBalance.toFixed(2)),
+          sweptProfitsUsd: Number(this.sweptProfitsUsd.toFixed(2)),
+          usdtBalance: Number((this.usdtBalance + this.sweptProfitsUsd).toFixed(2)),
           usdcBalance: Number(this.usdcBalance.toFixed(2)),
           btcBalance: Number(this.btcBalance.toFixed(4)),
           ethBalance: Number(this.ethBalance.toFixed(4)),
           bnbBalance: Number(this.bnbBalance.toFixed(4)),
-          totalEquityUsd: Number(totalEquity.toFixed(2)),
+          totalEquityUsd: Number((totalEquity + this.sweptProfitsUsd).toFixed(2)),
           availableMarginUsd: Number(this.availableMarginUsd.toFixed(2)),
           autoSweepProfits: this.autoSweepEnabled,
           lastSyncAt: new Date().toISOString(),
@@ -712,14 +717,17 @@ class JakeGroveCfoService {
       notes: `Profit sweep credited to Binance Master UID ${config.binance.targetUid}`,
       verificationStatus: !this.hasLiveKeys || config.isSimulation ? 'SIMULATED' : 'VERIFIED',
     });
-    this.usdtBalance += amount;
+    this.sweptProfitsUsd += amount;
     this.notifyBalanceChange();
+    const consolidatedUsdt = Number((this.usdtBalance + this.sweptProfitsUsd).toFixed(2));
     return {
       success: true,
       sweepId: ledgerEntry.id,
       amount,
       asset: 'USDT',
-      newUsdtBalance: this.usdtBalance,
+      rawSpotBalance: Number(this.usdtBalance.toFixed(2)),
+      sweptProfitsUsd: Number(this.sweptProfitsUsd.toFixed(2)),
+      newUsdtBalance: consolidatedUsdt,
       targetUid: config.binance.targetUid,
       targetAddress: config.binance.primaryEvmAddress,
       timestamp: new Date().toISOString(),
@@ -851,6 +859,7 @@ class JakeGroveCfoService {
     ethBalance?: number;
     availableMarginUsd?: number;
     autoSweepEnabled?: boolean;
+    sweptProfitsUsd?: number;
   }): void {
     if (typeof state.usdtBalance === 'number') this.usdtBalance = state.usdtBalance;
     if (typeof state.usdcBalance === 'number') this.usdcBalance = state.usdcBalance;
@@ -858,6 +867,7 @@ class JakeGroveCfoService {
     if (typeof state.ethBalance === 'number') this.ethBalance = state.ethBalance;
     if (typeof state.availableMarginUsd === 'number') this.availableMarginUsd = state.availableMarginUsd;
     if (typeof state.autoSweepEnabled === 'boolean') this.autoSweepEnabled = state.autoSweepEnabled;
+    if (typeof state.sweptProfitsUsd === 'number') this.sweptProfitsUsd = state.sweptProfitsUsd;
     this.notifyBalanceChange();
   }
 }

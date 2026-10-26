@@ -126,6 +126,8 @@ export interface BinanceAccount {
   availableMarginUsd: number;
   autoSweepProfits: boolean;
   sweepThresholdUsd: number;
+  sweptProfitsUsd?: number;
+  rawSpotBalance?: number;
   vipTier: string;
   makerFeeRate: number;
   takerFeeRate: number;
