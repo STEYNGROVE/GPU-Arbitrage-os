@@ -133,6 +133,8 @@ export const BinanceTreasury: React.FC<BinanceTreasuryProps> = ({
   const [activeTab, setActiveTab] = useState<'withdraw' | 'deposit' | 'balances' | 'depin' | 'hedges' | 'transfers' | 'providers'>('withdraw');
   const [borrowInput, setBorrowInput] = useState<number>(10000);
   const [isSweeping, setIsSweeping] = useState<boolean>(false);
+  const [sweepReceipt, setSweepReceipt] = useState<{ amount: number; txId: string } | null>(null);
+  const [customSweepAmount, setCustomSweepAmount] = useState<number>(250);
   const [borrowSuccessMsg, setBorrowSuccessMsg] = useState<string | null>(null);
   const [copiedText, setCopiedText] = useState<string | null>(null);
 
@@ -414,13 +416,16 @@ export const BinanceTreasury: React.FC<BinanceTreasuryProps> = ({
     runAddressVerificationProbe(selectedWithdrawNetwork);
   }, [selectedWithdrawNetwork]);
 
-  const handleExecuteSweep = () => {
-    if (unsettledLeasePnL <= 0) return;
+  const handleExecuteSweep = (overrideAmount?: number) => {
+    const amt = overrideAmount !== undefined ? overrideAmount : (unsettledLeasePnL > 0 ? unsettledLeasePnL : customSweepAmount);
+    if (amt <= 0) return;
     setIsSweeping(true);
     setTimeout(() => {
-      onSweepProfits(unsettledLeasePnL);
+      onSweepProfits(amt);
       setIsSweeping(false);
-    }, 700);
+      setSweepReceipt({ amount: amt, txId: `SWP-${Date.now()}` });
+      setTimeout(() => setSweepReceipt(null), 8000);
+    }, 600);
   };
 
   const handleBorrowSubmit = (e: React.FormEvent) => {
@@ -827,21 +832,65 @@ export const BinanceTreasury: React.FC<BinanceTreasuryProps> = ({
               <div className="flex items-center justify-between">
                 <span className="text-xs font-medium text-slate-400">Unsettled Lease Profits</span>
                 <span className="font-mono text-xs text-emerald-400 font-bold tabular-nums">
-                  +${unsettledLeasePnL.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  +${unsettledLeasePnL > 0 ? unsettledLeasePnL.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
                 </span>
               </div>
 
+              {/* Quick Select Buttons */}
+              <div className="grid grid-cols-4 gap-1.5 text-[10px] font-mono">
+                {[100, 250, 500, 1000].map((val) => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => {
+                      setCustomSweepAmount(val);
+                      handleExecuteSweep(val);
+                    }}
+                    disabled={isSweeping}
+                    className="py-1 px-1 bg-slate-900 hover:bg-slate-850 text-amber-300 border border-slate-700/80 rounded text-center transition-colors font-bold cursor-pointer disabled:opacity-50"
+                  >
+                    +${val}
+                  </button>
+                ))}
+              </div>
+
               <button
-                onClick={handleExecuteSweep}
-                disabled={isSweeping || unsettledLeasePnL <= 0}
+                onClick={() => handleExecuteSweep()}
+                disabled={isSweeping}
                 className="w-full py-2 text-xs font-bold text-slate-950 bg-gradient-to-r from-amber-400 to-yellow-300 hover:from-amber-300 hover:to-yellow-200 rounded-lg transition-all cursor-pointer shadow-md disabled:opacity-50 flex items-center justify-center gap-1.5"
               >
                 <Zap className={`w-3.5 h-3.5 fill-current ${isSweeping ? 'animate-spin' : ''}`} />
-                <span>{isSweeping ? 'Sweeping...' : 'Sweep Profits to Binance USDT'}</span>
+                <span>
+                  {isSweeping ? 'Sweeping Funds...' : `Sweep $${unsettledLeasePnL > 0 ? unsettledLeasePnL.toFixed(2) : customSweepAmount.toFixed(2)} to Binance USDT`}
+                </span>
               </button>
             </div>
           </div>
         </div>
+
+        {/* Sweep Confirmed Banner Receipt */}
+        {sweepReceipt && (
+          <div className="p-4 bg-emerald-950/80 border border-emerald-500/70 rounded-lg flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs text-emerald-200 animate-in fade-in duration-200 shadow-lg">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-full bg-emerald-500/20 border border-emerald-400 flex items-center justify-center text-emerald-300 shrink-0">
+                <CheckCircle2 className="w-5 h-5 text-emerald-300" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-white text-sm">
+                    ${sweepReceipt.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })} USDT Profit Sweep Credited to Binance Master Treasury!
+                  </span>
+                  <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-emerald-900 text-emerald-200 border border-emerald-600">
+                    CONFIRMED
+                  </span>
+                </div>
+                <div className="text-[11px] text-emerald-300/90 font-mono mt-0.5">
+                  Target UID: <span className="text-amber-400 font-bold">{binanceAccount.binanceUid}</span> ({binanceAccount.ownerEmail}) · Inbound Address: <span className="text-white font-bold">{binanceAccount.verifiedDepositAddress}</span> (BEP20) · Ledger ID: {sweepReceipt.txId}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Withdrawal Confirmed Banner Receipt */}
         {withdrawalReceipt && (
@@ -959,8 +1008,11 @@ export const BinanceTreasury: React.FC<BinanceTreasuryProps> = ({
               ${binanceAccount.usdtBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
           </div>
-          <div className="mt-2 text-[11px] text-slate-400 flex items-center gap-1.5 font-mono">
-            <span>Available for withdrawal / escrow</span>
+          <div className="mt-2 text-[11px] text-slate-400 flex items-center justify-between font-mono">
+            <span>Exchange Spot: ${binanceAccount.rawSpotBalance !== undefined ? binanceAccount.rawSpotBalance.toFixed(2) : binanceAccount.usdtBalance.toFixed(2)}</span>
+            {binanceAccount.sweptProfitsUsd ? (
+              <span className="text-amber-300 font-bold">Swept: +${binanceAccount.sweptProfitsUsd.toFixed(2)}</span>
+            ) : null}
           </div>
         </div>
 

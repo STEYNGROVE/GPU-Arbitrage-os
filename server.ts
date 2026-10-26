@@ -680,7 +680,7 @@ async function startServer() {
         type: e.type,
         asset: e.asset,
         amount: e.amount,
-        status: e.state === 'CONFIRMED' || e.state === 'SETTLED' ? 'CONFIRMED' : 'PENDING',
+        status: e.state === 'CONFIRMED' ? 'CONFIRMED' : 'PENDING',
         providerRef: e.provider,
         destinationAddress: e.destinationAddress || config.binance.primaryEvmAddress,
         network: e.network || 'BNB Smart Chain (BEP20)',
