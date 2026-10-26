@@ -225,6 +225,23 @@ class SystemMemoryService {
       }
     } catch {}
 
+    // Always compute and advance authentic accrued PnL for active contracts based on physical time elapsed
+    if (Array.isArray(this.currentState.activeContracts)) {
+      const now = Date.now();
+      this.currentState.activeContracts = this.currentState.activeContracts.map((c: any) => {
+        if (c.status === 'ACTIVE_ROUTING' && c.startTime && c.netSpreadPerHour && c.nodeCount) {
+          const elapsedHours = Math.max(0, (now - Number(c.startTime)) / 3600000);
+          const runningHours = c.durationHours > 0 ? Math.min(elapsedHours, c.durationHours) : elapsedHours;
+          const accrued = runningHours * Number(c.netSpreadPerHour) * Number(c.nodeCount);
+          return {
+            ...c,
+            totalAccruedPnL: Number(Math.max(Number(c.totalAccruedPnL) || 0, accrued).toFixed(2)),
+          };
+        }
+        return c;
+      });
+    }
+
     return {
       ...this.currentState,
       snapshots: this.snapshots,
