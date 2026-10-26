@@ -914,7 +914,7 @@ async function startServer() {
           totalMasterEquityUsd: binanceAcct.totalEquityUsd + binanceAcct.availableMarginUsd,
           usdtMasterSpotBalance: binanceAcct.usdtBalance,
           crossMarginInstitutionalLine: binanceAcct.availableMarginUsd,
-          realizedArbitrageProfitPoolUsd: ledgerBreakdown.gaapBalanceSheet.revenueMetrics.realisedProfitUsd,
+          realizedArbitrageProfitPoolUsd: ledgerBreakdown.metrics.revenueMetrics.realisedProfitUsd,
           activeLeaseCount: 0,
         },
         communications: {
