@@ -27,7 +27,8 @@ import {
   INITIAL_BINANCE_ACCOUNT,
   DEPIN_TOKENS_LIST,
   INITIAL_BINANCE_HEDGES,
-  INITIAL_BINANCE_TRANSFERS
+  INITIAL_BINANCE_TRANSFERS,
+  computeContractAccruedPnL
 } from './services/arbitrageEngine';
 import { TopBar } from './components/TopBar';
 import { MarketSpreadTable } from './components/MarketSpreadTable';
@@ -111,7 +112,14 @@ export default function App() {
         if (data.success && data.state) {
           const s = data.state;
           if (Array.isArray(s.opportunities) && s.opportunities.length > 0) setOpportunities(s.opportunities);
-          if (Array.isArray(s.activeContracts)) setActiveContracts(s.activeContracts);
+          if (Array.isArray(s.activeContracts)) {
+            setActiveContracts(
+              s.activeContracts.map((c: ActiveContract) => ({
+                ...c,
+                totalAccruedPnL: computeContractAccruedPnL(c),
+              }))
+            );
+          }
           if (Array.isArray(s.relations) && s.relations.length > 0) setRelations(s.relations);
           if (Array.isArray(s.logs) && s.logs.length > 0) setLogs(s.logs);
           if (s.binanceAccount && s.binanceAccount.ownerEmail) {
@@ -232,13 +240,21 @@ export default function App() {
           }
         })
         .catch(() => {});
+
+      // 4. Continuously advance real accrued PnL on active contracts as physical time elapses
+      setActiveContracts((prev) =>
+        prev.map((c) => {
+          const freshPnL = computeContractAccruedPnL(c);
+          return freshPnL !== c.totalAccruedPnL ? { ...c, totalAccruedPnL: freshPnL } : c;
+        })
+      );
     }, 4000);
 
     return () => clearInterval(interval);
   }, []);
 
-  // Compute total accrued PnL across active contracts
-  const totalAccruedPnL = activeContracts.reduce((sum, c) => sum + c.totalAccruedPnL, 0);
+  // Compute total accrued PnL across active contracts with authentic physical time progression
+  const totalAccruedPnL = activeContracts.reduce((sum, c) => sum + computeContractAccruedPnL(c), 0);
 
   // Handlers
   const handleSelectExecute = (opp: ArbitrageOpportunity) => {
@@ -336,6 +352,7 @@ export default function App() {
   const handleSettleContract = (contractId: string) => {
     const contract = activeContracts.find((c) => c.id === contractId);
     if (!contract) return;
+    const finalPnL = computeContractAccruedPnL(contract);
     const remainingContracts = activeContracts.filter((c) => c.id !== contractId);
     setActiveContracts(remainingContracts);
 
@@ -346,17 +363,22 @@ export default function App() {
       timestamp: timeStr,
       level: 'ORDER_EXEC',
       service: 'settlement_engine',
-      message: `Contract ${contractId} settled & closed. Realized profit: $${contract.totalAccruedPnL.toFixed(2)}. Inbound GPU nodes released back to ${contract.buyProvider}.`,
+      message: `Contract ${contractId} settled & closed. Realized profit: +$${finalPnL.toFixed(2)} USDT. Inbound GPU nodes released back to ${contract.buyProvider}.`,
       latencyMs: 2.2,
     };
     setLogs((prev) => [newLog, ...prev]);
+
+    // Automatically sweep settled profit into Binance Treasury master balance
+    if (finalPnL > 0) {
+      handleSweepProfits(finalPnL);
+    }
 
     syncSystemMemory(
       {
         activeContracts: remainingContracts,
         logs: [newLog, ...logs],
       },
-      `Settled Contract ${contractId}`
+      `Settled Contract ${contractId} (+$${finalPnL.toFixed(2)} USDT)`
     );
   };
 
