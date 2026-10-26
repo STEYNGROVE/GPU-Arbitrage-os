@@ -160,6 +160,14 @@ export default function App() {
         }
       })
       .catch(() => {});
+    fetch('/api/binance/transfers')
+      .then((res) => res.json())
+      .then((trfs) => {
+        if (Array.isArray(trfs) && trfs.length > 0) {
+          setTransfers(trfs);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   // Periodic persistence sync so exact accrued PnL is continuously preserved on disk
@@ -361,6 +369,20 @@ export default function App() {
       body: JSON.stringify({ amount }),
     })
       .then((res) => res.json())
+      .then((result) => {
+        if (result && result.success) {
+          fetch('/api/binance/account')
+            .then((r) => r.json())
+            .then((acct) => {
+              if (acct && acct.ownerEmail) setBinanceAccount(acct);
+            });
+          fetch('/api/binance/transfers')
+            .then((r) => r.json())
+            .then((trfs) => {
+              if (Array.isArray(trfs) && trfs.length > 0) setTransfers(trfs);
+            });
+        }
+      })
       .catch((err) => console.warn('Backend sweep sync warning:', err));
 
     const updatedUsdt = Number((binanceAccount.usdtBalance + amount).toFixed(2));
@@ -368,6 +390,7 @@ export default function App() {
     const updatedAccount = {
       ...binanceAccount,
       usdtBalance: updatedUsdt,
+      sweptProfitsUsd: Number(((binanceAccount.sweptProfitsUsd || 0) + amount).toFixed(2)),
       totalEquityUsd: updatedEquity,
     };
     setBinanceAccount(updatedAccount);

@@ -659,6 +659,8 @@ async function startServer() {
       const updatedAccount = {
         ...(curState.binanceAccount || {}),
         usdtBalance: result.newUsdtBalance,
+        rawSpotBalance: result.rawSpotBalance,
+        sweptProfitsUsd: result.sweptProfitsUsd,
         totalEquityUsd: Number(((curState.binanceAccount?.totalEquityUsd || 0) + amount).toFixed(2)),
       };
       systemMemoryService.updateState({ binanceAccount: updatedAccount }, `Profit Sweep +$${amount} USDT`);
@@ -666,6 +668,25 @@ async function startServer() {
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
+  });
+
+  app.get('/api/binance/transfers', (_req: Request, res: Response) => {
+    const entries = financialLedger.getAllEntries();
+    const transfers = entries
+      .filter((e) => ['PROFIT_SWEEP', 'WITHDRAWAL', 'DIRECT_DEPOSIT', 'MARGIN_BORROW', 'MARGIN_REPAY'].includes(e.type))
+      .map((e) => ({
+        id: e.id,
+        timestamp: e.timestamp.split('T')[1]?.slice(0, 8) || e.timestamp,
+        type: e.type,
+        asset: e.asset,
+        amount: e.amount,
+        status: e.state === 'CONFIRMED' || e.state === 'SETTLED' ? 'CONFIRMED' : 'PENDING',
+        providerRef: e.provider,
+        destinationAddress: e.destinationAddress || config.binance.primaryEvmAddress,
+        network: e.network || 'BNB Smart Chain (BEP20)',
+        txHash: e.metadata?.txHash,
+      }));
+    res.json(transfers);
   });
 
   app.post('/api/binance/borrow', async (req: Request, res: Response) => {

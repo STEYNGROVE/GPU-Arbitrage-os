@@ -105,6 +105,7 @@ class SystemMemoryService {
               ethBalance: parsed.binanceAccount.ethBalance,
               availableMarginUsd: parsed.binanceAccount.availableMarginUsd,
               autoSweepEnabled: parsed.binanceAccount.autoSweepProfits,
+              sweptProfitsUsd: parsed.binanceAccount.sweptProfitsUsd,
             });
           }
 
