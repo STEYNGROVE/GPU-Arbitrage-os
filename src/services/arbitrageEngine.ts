@@ -400,6 +400,29 @@ export const INITIAL_ARBITRAGE_OPPORTUNITIES: ArbitrageOpportunity[] = [
   },
 ];
 
+export function computeContractAccruedPnL(contract: {
+  startTime: number;
+  durationHours: number;
+  netSpreadPerHour: number;
+  nodeCount: number;
+  status: string;
+  totalAccruedPnL?: number;
+}, now: number = Date.now()): number {
+  if (contract.status === 'PAUSED') {
+    return Number((contract.totalAccruedPnL || 0).toFixed(2));
+  }
+  const elapsedMillis = Math.max(0, now - Number(contract.startTime || now));
+  const elapsedHours = elapsedMillis / (1000 * 3600);
+  const effectiveHours = contract.durationHours > 0 ? Math.min(elapsedHours, contract.durationHours) : elapsedHours;
+  const accrued = effectiveHours * Number(contract.netSpreadPerHour || 0) * Number(contract.nodeCount || 1);
+  return Number(Math.max(Number(contract.totalAccruedPnL) || 0, accrued).toFixed(2));
+}
+
+const c1Start = Date.now() - 48 * 3600 * 1000;
+const c2Start = Date.now() - 72 * 3600 * 1000;
+const c3Start = Date.now() - 24 * 3600 * 1000;
+const c4Start = Date.now() - 18 * 3600 * 1000;
+
 export const INITIAL_ACTIVE_CONTRACTS: ActiveContract[] = [
   {
     id: 'CTR-8812-H100',
@@ -414,8 +437,14 @@ export const INITIAL_ACTIVE_CONTRACTS: ActiveContract[] = [
     sellRegion: 'US-East (Virginia)',
     sellRate: 2.85,
     netSpreadPerHour: 1.25,
-    totalAccruedPnL: 0.00,
-    startTime: Date.now() - 48 * 3600 * 1000,
+    totalAccruedPnL: computeContractAccruedPnL({
+      startTime: c1Start,
+      durationHours: 168,
+      netSpreadPerHour: 1.25,
+      nodeCount: 8,
+      status: 'ACTIVE_ROUTING',
+    }),
+    startTime: c1Start,
     durationHours: 168, // 7 days
     status: 'ACTIVE_ROUTING',
     uptimeSla: 99.98,
@@ -436,8 +465,14 @@ export const INITIAL_ACTIVE_CONTRACTS: ActiveContract[] = [
     sellRegion: 'US-West Enterprise Hub',
     sellRate: 5.40,
     netSpreadPerHour: 2.02,
-    totalAccruedPnL: 0.00,
-    startTime: Date.now() - 72 * 3600 * 1000,
+    totalAccruedPnL: computeContractAccruedPnL({
+      startTime: c2Start,
+      durationHours: 720,
+      netSpreadPerHour: 2.02,
+      nodeCount: 4,
+      status: 'ACTIVE_ROUTING',
+    }),
+    startTime: c2Start,
     durationHours: 720, // 30 days
     status: 'ACTIVE_ROUTING',
     uptimeSla: 99.99,
@@ -458,8 +493,14 @@ export const INITIAL_ACTIVE_CONTRACTS: ActiveContract[] = [
     sellRegion: 'Frankfurt de-central-1',
     sellRate: 3.90,
     netSpreadPerHour: 1.65,
-    totalAccruedPnL: 0.00,
-    startTime: Date.now() - 24 * 3600 * 1000,
+    totalAccruedPnL: computeContractAccruedPnL({
+      startTime: c3Start,
+      durationHours: 168,
+      netSpreadPerHour: 1.65,
+      nodeCount: 4,
+      status: 'ACTIVE_ROUTING',
+    }),
+    startTime: c3Start,
     durationHours: 168,
     status: 'ACTIVE_ROUTING',
     uptimeSla: 99.95,
@@ -480,8 +521,14 @@ export const INITIAL_ACTIVE_CONTRACTS: ActiveContract[] = [
     sellRegion: 'Chicago CME Direct Connect',
     sellRate: 1.95,
     netSpreadPerHour: 0.89,
-    totalAccruedPnL: 0.00,
-    startTime: Date.now() - 18 * 3600 * 1000,
+    totalAccruedPnL: computeContractAccruedPnL({
+      startTime: c4Start,
+      durationHours: 72,
+      netSpreadPerHour: 0.89,
+      nodeCount: 16,
+      status: 'ACTIVE_ROUTING',
+    }),
+    startTime: c4Start,
     durationHours: 72,
     status: 'ACTIVE_ROUTING',
     uptimeSla: 99.88,

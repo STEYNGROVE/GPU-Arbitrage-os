@@ -1,5 +1,6 @@
 import React from 'react';
 import { ActiveContract } from '../types/arbitrage';
+import { computeContractAccruedPnL } from '../services/arbitrageEngine';
 import {
   ShieldCheck,
   TrendingUp,
@@ -33,7 +34,7 @@ export const ActiveContractsPortfolio: React.FC<ActiveContractsPortfolioProps> =
   onSettleContract,
   onOpenQuickDeploy,
 }) => {
-  const totalPnL = contracts.reduce((sum, c) => sum + c.totalAccruedPnL, 0);
+  const totalPnL = contracts.reduce((sum, c) => sum + computeContractAccruedPnL(c), 0);
   const totalGpus = contracts.reduce((sum, c) => sum + (c.status === 'ACTIVE_ROUTING' ? c.totalGpus : 0), 0);
   const totalHourlyCashflow = contracts.reduce(
     (sum, c) => (c.status === 'ACTIVE_ROUTING' ? sum + c.netSpreadPerHour * c.nodeCount : sum),
@@ -178,7 +179,7 @@ export const ActiveContractsPortfolio: React.FC<ActiveContractsPortfolioProps> =
                     </span>
 
                     <span className="text-xs font-mono text-emerald-400 font-bold tabular-nums">
-                      +${contract.totalAccruedPnL.toFixed(2)} Accrued PnL
+                      +${computeContractAccruedPnL(contract).toFixed(2)} Accrued PnL
                     </span>
                   </div>
                 </div>
