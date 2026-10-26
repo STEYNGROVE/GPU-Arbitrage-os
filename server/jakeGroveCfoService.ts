@@ -713,6 +713,9 @@ class JakeGroveCfoService {
       isSimulated: !this.hasLiveKeys || config.isSimulation,
       metadata: { targetUid: config.binance.targetUid },
     });
+    financialLedger.transitionState(ledgerEntry.id, 'SUBMITTED', {
+      notes: `Profit sweep initiated for Binance Master UID ${config.binance.targetUid}`,
+    });
     financialLedger.transitionState(ledgerEntry.id, 'CONFIRMED', {
       notes: `Profit sweep credited to Binance Master UID ${config.binance.targetUid}`,
       verificationStatus: !this.hasLiveKeys || config.isSimulation ? 'SIMULATED' : 'VERIFIED',
@@ -753,6 +756,9 @@ class JakeGroveCfoService {
       network: 'BINANCE_CROSS_MARGIN',
       isSimulated: !this.hasLiveKeys || config.isSimulation,
       metadata: { targetUid: config.binance.targetUid },
+    });
+    financialLedger.transitionState(ledgerEntry.id, 'SUBMITTED', {
+      notes: `Institutional Cross-Margin request submitted for Master UID ${config.binance.targetUid}`,
     });
     financialLedger.transitionState(ledgerEntry.id, 'CONFIRMED', {
       notes: `Institutional Cross-Margin borrowed @ 4.2% APR for Master UID ${config.binance.targetUid}`,

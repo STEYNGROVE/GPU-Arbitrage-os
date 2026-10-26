@@ -252,7 +252,7 @@ class FinancialLedgerService {
 
     // State machine progression enforcement
     const allowedTransitions: Record<TransactionState, TransactionState[]> = {
-      CREATED: ['SUBMITTED', 'REJECTED', 'CANCELLED', 'BLOCKED'],
+      CREATED: ['SUBMITTED', 'CONFIRMED', 'REJECTED', 'CANCELLED', 'BLOCKED'],
       SUBMITTED: ['PENDING', 'CONFIRMED', 'FAILED', 'REJECTED', 'BLOCKED'],
       PENDING: ['CONFIRMED', 'FAILED', 'REJECTED', 'CANCELLED', 'BLOCKED'],
       CONFIRMED: [], // Terminal success
