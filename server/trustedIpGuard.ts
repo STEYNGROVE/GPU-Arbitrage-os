@@ -1,5 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import os from 'os';
+import net from 'node:net';
+import { extractAuthToken, isAuthorizedPassToken } from './authMiddleware.ts';
 import crypto from 'crypto';
 import { config } from './config.ts';
 
@@ -28,12 +30,12 @@ class TrustedIpGuardService {
   private totalBlocked: number = 0;
   private totalAllowed: number = 0;
   private lastScanTime: string = new Date().toISOString();
-  private autoDetectEnabled: boolean = true;
+  private autoDetectEnabled: boolean = false;
   private detectedEgress: DetectedEgressInfo = {
-    ipv4: '34.96.39.119',
-    ipv6: '2600:1900:0:3404::b01',
+    ipv4: '',
+    ipv6: '',
     timestamp: new Date().toISOString(),
-    provider: 'Google Cloud Platform (europe-west3 Frankfurt)',
+    provider: 'UNVERIFIED',
   };
 
   constructor() {
@@ -75,9 +77,9 @@ class TrustedIpGuardService {
     return {
       outboundIpv4: this.detectedEgress.ipv4,
       outboundIpv6: this.detectedEgress.ipv6,
-      binanceWhitelistedIps: [this.detectedEgress.ipv4, '35.242.198.112'],
-      cloudRegion: 'europe-west3 (Frankfurt, Google Cloud Platform)',
-      status: 'VERIFIED_ACTIVE',
+      binanceWhitelistedIps: [],
+      cloudRegion: 'UNVERIFIED',
+      status: this.detectedEgress.ipv4 ? 'EGRESS_OBSERVED_WHITELIST_UNVERIFIED' : 'UNVERIFIED',
       lastScanTime: this.detectedEgress.timestamp,
       enforcementMode: this.enforcementMode,
       totalBlocked: this.totalBlocked,
@@ -86,24 +88,7 @@ class TrustedIpGuardService {
   }
 
   public getClientIp(req: Request): string {
-    const forwarded = req.headers['x-forwarded-for'];
-    if (typeof forwarded === 'string') {
-      const firstIp = forwarded.split(',')[0].trim();
-      return this.normalizeIp(firstIp);
-    }
-    if (Array.isArray(forwarded) && forwarded.length > 0) {
-      return this.normalizeIp(forwarded[0].trim());
-    }
-    const realIp = req.headers['x-real-ip'];
-    if (typeof realIp === 'string') {
-      return this.normalizeIp(realIp.trim());
-    }
-    const cfIp = req.headers['cf-connecting-ip'];
-    if (typeof cfIp === 'string') {
-      return this.normalizeIp(cfIp.trim());
-    }
-    const socketIp = req.socket.remoteAddress || '127.0.0.1';
-    return this.normalizeIp(socketIp);
+    return this.normalizeIp(req.ip || req.socket.remoteAddress || '');
   }
 
   public normalizeIp(rawIp: string): string {
@@ -119,137 +104,24 @@ class TrustedIpGuardService {
   }
 
   public isIpTrusted(clientIp: string): boolean {
-    const normalized = this.normalizeIp(clientIp);
-    if (!normalized) return false;
-
-    // GCP Frankfurt Regional Institutional Relay IP address hard lock
-    if (normalized === '35.242.198' || normalized === '35.242.198.112' || normalized.startsWith('35.242.198.')) {
-      return true;
-    }
-
-    // Exact match check
-    if (this.trustedIps.has(normalized)) return true;
-    if (this.trustedIps.has(clientIp)) return true;
-
-    // Loopback aliases
-    if (
-      (normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1') &&
-      (this.trustedIps.has('127.0.0.1') || this.trustedIps.has('localhost'))
-    ) {
-      return true;
-    }
-
-    // Subnet matching
-    for (const pattern of this.trustedIps) {
-      if (pattern.startsWith('10.') && normalized.startsWith('10.')) return true;
-      if (pattern.startsWith('172.') && normalized.startsWith('172.')) return true;
-      if (pattern.startsWith('192.168.') && normalized.startsWith('192.168.')) return true;
-      if (pattern.endsWith('/*') || pattern.includes('*')) {
-        const prefix = pattern.replace('/*', '').replace('*', '');
-        if (normalized.startsWith(prefix)) return true;
-      }
-    }
-
-    return false;
+    return this.trustedIps.has(this.normalizeIp(clientIp));
   }
 
-  /**
-   * Express middleware strictly enforcing IP allowlist.
-   * UNKNOWN CLIENT IPS ARE DENIED BY DEFAULT IN ENFORCED MODE.
-   * High-priority pass token (V13_BRIDGE_TOKEN / OWNER_OVERRIDE_KEY) clears the Nginx security wall.
-   */
   public middleware() {
     return (req: Request, res: Response, next: NextFunction) => {
-      // Allow static assets, CSS, images, and HTML entry point
-      if (!req.path.startsWith('/api')) {
-        return next();
-      }
-
-      // Public health check, settings bridge test, and payment webhooks
-      if (
-        req.path === '/api/health' ||
-        req.path === '/api/settings/bridge' ||
-        req.path.startsWith('/api/payments/payfast/notify') ||
-        req.path.startsWith('/api/payments/gotyme/webhook')
-      ) {
-        return next();
-      }
-
+      if (!req.path.startsWith('/api') || req.path === '/api/health') return next();
       const clientIp = this.getClientIp(req);
-      const isTrusted = this.isIpTrusted(clientIp);
-      const nowStr = new Date().toTimeString().split(' ')[0];
-
-      if (!isTrusted) {
-        // 1. If auto-detection is enabled, automatically whitelist client IP
-        if (this.autoDetectEnabled && clientIp) {
-          this.addTrustedIp(clientIp);
-          this.totalAllowed++;
-          return next();
-        }
-
-        // 2. Allow same-origin UI browser requests or in simulation/dev mode
-        const isSameOrigin =
-          req.headers['sec-fetch-site'] === 'same-origin' ||
-          (typeof req.headers.referer === 'string' && req.headers.referer.includes(req.hostname));
-        if (isSameOrigin || config.isSimulation) {
-          if (clientIp) this.addTrustedIp(clientIp);
-          this.totalAllowed++;
-          return next();
-        }
-
-        this.totalBlocked++;
-        const logEntry: SecurityAccessLog = {
-          id: `sec-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`,
-          timestamp: nowStr,
-          ip: clientIp,
-          method: req.method,
-          path: req.path,
-          status: 'BLOCKED',
-          reason: `Access Denied: Untrusted IP Address (${clientIp}) not present in security allowlist.`,
-        };
-        this.addLog(logEntry);
-
-        if (this.enforcementMode === 'ENFORCED') {
-          // If the request carries verified pass token (V13_BRIDGE_TOKEN / OWNER_OVERRIDE_KEY), clear security wall
-          const bridgeHeader = req.headers['x-bridge-token'] as string;
-          const authKey = (req.headers['x-api-key'] || req.headers['x-arbitrage-auth']) as string;
-          const authHeader = req.headers['authorization'];
-          const bearer = typeof authHeader === 'string' && authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : null;
-          const candidate = (bridgeHeader || authKey || bearer || '').trim();
-
-          const validTokens = new Set([
-            config.ownerApiKey,
-            config.ownerOverrideKey,
-            config.bridgeToken,
-            config.apiAuthToken,
-            '',
-            'REDACTED_LEGACY_TOKEN_PREFIX_',
-          ]);
-
-          if (candidate && validTokens.has(candidate)) {
-            this.totalAllowed++;
-            return next();
-          }
-
-          console.warn(`[Security Alert: 403 Forbidden] Rejected untrusted IP: ${clientIp} attempting ${req.method} ${req.path}`);
-          return res.status(403).json({
-            error: 'Access Denied: Untrusted IP Address',
-            clientIp,
-            status: 403,
-            code: 'IP_NOT_WHITELISTED',
-            message: 'Access to GPU Compute Arbitrage OS is restricted to authorized IP addresses and authenticated operators only.',
-          });
-        }
+      if (this.isIpTrusted(clientIp) || isAuthorizedPassToken(extractAuthToken(req)) || this.enforcementMode === 'AUDIT_MODE') {
+        this.totalAllowed++; return next();
       }
-
-      this.totalAllowed++;
-      return next();
+      this.totalBlocked++;
+      return res.status(403).json({ error: 'Authenticated access required', code: 'IP_NOT_WHITELISTED' });
     };
   }
 
   public addTrustedIp(ip: string): boolean {
     const normalized = this.normalizeIp(ip);
-    if (!normalized) return false;
+    if (!net.isIP(normalized)) return false;
     this.trustedIps.add(normalized);
     console.log(`[Trusted IP Guard] Authorized new trusted IP: ${normalized}`);
     return true;
@@ -293,7 +165,7 @@ class TrustedIpGuardService {
       detectedOutboundIp: this.detectedEgress.ipv4,
       clientIp: normalized,
       isClientIpTrusted: normalized ? this.isIpTrusted(normalized) : false,
-      autoDetectedIps: [this.detectedEgress.ipv4, '35.242.198.112'],
+      autoDetectedIps: [this.detectedEgress.ipv4].filter(Boolean),
       totalTrustedIps: this.trustedIps.size,
     };
   }
@@ -314,7 +186,7 @@ class TrustedIpGuardService {
       detectedOutboundIp: this.detectedEgress.ipv4,
       detectedOutboundIpv6: this.detectedEgress.ipv6,
       detectedEgress: this.detectedEgress,
-      autoDetectedIps: [this.detectedEgress.ipv4, '35.242.198.112'],
+      autoDetectedIps: [this.detectedEgress.ipv4].filter(Boolean),
       recentAccessLogs: this.accessLogs.slice(-20),
     };
   }

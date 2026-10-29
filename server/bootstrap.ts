@@ -80,10 +80,10 @@ export async function bootstrapSystem(): Promise<BootstrapReport> {
   logLine(`[Bootstrap Upstream] GitHub Sync: ${gitStatus.upstreamRepo} [${gitStatus.syncState}] (Token: ${gitStatus.tokenConfigured ? 'CONFIGURED' : 'NOT_CONFIGURED'})`);
 
   // 4. Fleet Scaling
-  logLine('[Bootstrap 4/5] Fleet topology scaled: 100 Discovery Agents / 50 Yield Optimizers.');
+  logLine('[Bootstrap 4/5] No live workers launched. Execution adapter unavailable.');
 
   // System Status Resolution
-  let systemStatus: BootstrapReport['systemStatus'] = 'ONLINE_NOMINAL';
+  let systemStatus: BootstrapReport['systemStatus'] = 'CRITICAL_BLOCKED';
   if (config.isProduction && (!envValidated || !dbReadiness.isReady)) {
     systemStatus = 'CRITICAL_BLOCKED';
   } else if (config.isSimulation) {
@@ -104,8 +104,8 @@ export async function bootstrapSystem(): Promise<BootstrapReport> {
     binanceStatus,
     githubSyncStatus: gitStatus,
     memoryDiagnostics,
-    discoveryFleetTarget: 100,
-    optimizerFleetTarget: 50,
+    discoveryFleetTarget: 0,
+    optimizerFleetTarget: 0,
     systemStatus,
     logs,
   };

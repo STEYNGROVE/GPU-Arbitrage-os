@@ -1,26 +1,11 @@
-FROM node:22-alpine AS builder
-
+FROM node:24-bookworm-slim
 WORKDIR /app
-COPY package*.json ./
-RUN npm install
-
+COPY package.json package-lock.json ./
+RUN npm ci
 COPY . .
-RUN npm run build
-
-FROM node:22-alpine AS runner
-WORKDIR /app
+RUN npm run build && npm run lint && npm run security:check
 ENV NODE_ENV=production
-ENV PORT=8080
-
-COPY package*.json ./
-RUN npm install --omit=dev
-
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/server ./server
-COPY --from=builder /app/data ./data
-COPY --from=builder /app/server.ts ./server.ts
-COPY --from=builder /app/tsconfig.json ./tsconfig.json
-
-EXPOSE 8080
-
-CMD ["node", "server.ts"]
+RUN mkdir -p data && chown -R node:node /app
+USER node
+EXPOSE 3000
+CMD ["npm", "start"]

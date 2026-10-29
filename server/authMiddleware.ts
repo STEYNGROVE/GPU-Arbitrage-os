@@ -13,8 +13,12 @@ const rateLimitStore = new Map<string, RateLimitRecord>();
 export function rateLimiter(maxRequests: number = 60, windowMs: number = 60000) {
   return (req: Request, res: Response, next: NextFunction) => {
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    const key = `${ip}:${req.path}`;
     const now = Date.now();
+    const key = ip;
+    if (rateLimitStore.size > 10000) {
+      for (const [oldKey, value] of rateLimitStore) if (value.resetAt < now) rateLimitStore.delete(oldKey);
+      if (rateLimitStore.size > 10000 && !rateLimitStore.has(key)) return res.status(429).json({ error: 'Rate limiter capacity reached' });
+    }
 
     const record = rateLimitStore.get(key);
     if (!record || now > record.resetAt) {
@@ -53,7 +57,7 @@ function cryptoSafeEqual(a: string, b: string): boolean {
 
 export function extractAuthToken(req: Request): string | null {
   const bridgeHeader = req.headers['x-bridge-token'];
-  if (typeof bridgeHeader === 'string') {
+  if (typeof bridgeHeader === 'string' && bridgeHeader.trim()) {
     return bridgeHeader.trim();
   }
 
@@ -63,7 +67,7 @@ export function extractAuthToken(req: Request): string | null {
   }
 
   const apiKeyHeader = req.headers['x-api-key'] || req.headers['x-arbitrage-auth'];
-  if (typeof apiKeyHeader === 'string') {
+  if (typeof apiKeyHeader === 'string' && apiKeyHeader.trim()) {
     return apiKeyHeader.trim();
   }
 
@@ -75,48 +79,8 @@ export function extractAuthToken(req: Request): string | null {
  * Allows safe read operations while strictly requiring authorization for mutations.
  */
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
-  // In development/simulation browser sessions, allow UI read operations
-  const token = extractAuthToken(req);
-
-  // If valid API token is supplied
-  if (isAuthorizedPassToken(token)) {
-    return next();
-  }
-
-  // If in production mode, strict auth is required
-  if (config.isProduction) {
-    return res.status(401).json({
-      error: 'Unauthorized',
-      code: 'AUTH_REQUIRED',
-      message: 'A valid Bearer token, X-Bridge-Token, or X-API-Key header is required to access this endpoint.',
-    });
-  }
-
-  // In simulation mode, check if request is state-mutating (POST, PUT, DELETE)
-  // Allow if localhost/loopback or same-origin browser session
-  const isSameOrigin =
-    req.headers['sec-fetch-site'] === 'same-origin' ||
-    (typeof req.headers.referer === 'string' && req.headers.referer.includes(req.hostname));
-  const isLocal =
-    req.ip === '127.0.0.1' ||
-    req.ip === '::1' ||
-    req.ip === '::ffff:127.0.0.1' ||
-    req.hostname === 'localhost';
-
-  if (!config.isProduction || isSameOrigin || isLocal) {
-    return next();
-  }
-
-  // Check token
-  if (!isAuthorizedPassToken(token)) {
-    return res.status(401).json({
-      error: 'Unauthorized',
-      code: 'AUTH_REQUIRED',
-      message: 'Unauthorized remote access. Provide X-Bridge-Token, X-API-Key or Bearer token.',
-    });
-  }
-
-  return next();
+  if (isAuthorizedPassToken(extractAuthToken(req))) return next();
+  return res.status(401).json({ error: 'Authentication required', code: 'AUTH_REQUIRED' });
 }
 
 /**
@@ -129,25 +93,14 @@ export function requireOwnerAuth(req: Request, res: Response, next: NextFunction
   const ownerTokens = [config.ownerApiKey, config.ownerOverrideKey].filter((value) => value && value.length >= 32);
   const isOwner = Boolean(token && ownerTokens.some((value) => cryptoSafeEqual(token.trim(), value)));
 
-  const isSameOrigin =
-    req.headers['sec-fetch-site'] === 'same-origin' ||
-    (typeof req.headers.referer === 'string' && req.headers.referer.includes(req.hostname));
-  const isLocal =
-    req.ip === '127.0.0.1' ||
-    req.ip === '::1' ||
-    req.ip === '::ffff:127.0.0.1' ||
-    req.hostname === 'localhost';
-
-  if (isOwner || (!config.isProduction && (isSameOrigin || isLocal))) {
-    return next();
-  }
+  if (isOwner) return next();
 
   // Audit log failed authorization attempt
   console.warn(`[Security Alert 403] Unauthorized access attempt to ${req.method} ${req.path} from IP: ${req.ip}`);
   return res.status(403).json({
     error: 'Forbidden: Owner Authorization Required',
     code: 'OWNER_PERMISSIONS_REQUIRED',
-    message: 'This operation requires verified owner authorization (OWNER_API_KEY or V13_BRIDGE_TOKEN).',
+    message: 'This operation requires verified owner authorization (OWNER_API_KEY or OWNER_OVERRIDE_KEY).',
   });
 }
 

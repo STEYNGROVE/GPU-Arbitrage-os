@@ -6,7 +6,7 @@ import { financialLedger } from './financialLedger.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const REVENUE_STORAGE_PATH = path.resolve(__dirname, '../data/revenue_pipeline.json');
+const REVENUE_STORAGE_PATH = path.resolve(process.env.APP_DATA_DIR || path.join(__dirname, '../data'), 'revenue_pipeline.json');
 
 export type CustomerLifecycleStage =
   | 'LEAD'
@@ -190,7 +190,8 @@ class CustomerRevenueService {
     const tax = 0; // B2B export cross-border compute typically zero-rated
     const totalUsd = subtotal + tax;
 
-    const exchangeRateZarPerUsd = 18.25; // Benchmark ZAR rate
+    const exchangeRateZarPerUsd = Number(process.env.USD_ZAR_RATE);
+    if (!Number.isFinite(exchangeRateZarPerUsd) || exchangeRateZarPerUsd <= 0) throw new Error('Configure a dated USD_ZAR_RATE before invoicing.');
     const totalZar = Number((totalUsd * exchangeRateZarPerUsd).toFixed(2));
 
     const invoice: CustomerInvoice = {
@@ -215,7 +216,7 @@ class CustomerRevenueService {
       currency: params.currency || 'USD',
       exchangeRateZarPerUsd,
       totalZar,
-      status: 'SENT',
+      status: 'DRAFT',
     };
 
     this.invoices.set(invoiceId, invoice);
@@ -262,28 +263,19 @@ class CustomerRevenueService {
     const invoice = this.invoices.get(params.invoiceId);
     if (!invoice) throw new Error(`Invoice ${params.invoiceId} not found.`);
 
-    invoice.status = 'PAID';
-    invoice.paidAt = new Date().toISOString();
-    invoice.paymentMethod = params.paymentMethod;
-    invoice.paymentReferenceId = params.paymentReferenceId;
-
-    const prospect = this.prospects.get(invoice.customerProspectId);
-    if (prospect) {
-      prospect.stage = 'PAID';
-      prospect.updatedAt = new Date().toISOString();
+    const receipt = financialLedger.getAllEntries().find(e =>
+      e.providerTransactionId === params.paymentReferenceId && e.state === 'CONFIRMED' &&
+      e.verificationStatus === 'VERIFIED' && !e.isSimulated &&
+      e.type === 'CUSTOMER_INVOICE_RECEIPT' && e.metadata?.invoiceId === invoice.invoiceId);
+    const expected = params.currency === 'ZAR' ? invoice.totalZar : invoice.totalUsd;
+    if (!receipt || receipt.asset !== params.currency || !Number.isFinite(params.amountPaid) ||
+        Math.abs(receipt.amount - expected) > 0.001 || Math.abs(params.amountPaid - expected) > 0.001) {
+      throw new Error('Payment requires an independently verified, matching invoice receipt.');
     }
-
-    // Register confirmed transaction in immutable financial ledger
-    financialLedger.createTransaction({
-      idempotencyKey: `INV-PAY-${invoice.invoiceId}-${params.paymentReferenceId}`,
-      type: 'CUSTOMER_INVOICE_RECEIPT',
-      accountType: params.currency === 'ZAR' ? 'BANK_ZAR' : 'SPOT',
-      asset: params.currency,
-      amount: params.amountPaid,
-      debitCredit: 'CREDIT',
-      provider: params.paymentMethod === 'PAYFAST' ? 'PAYFAST' : 'BINANCE',
-      metadata: { invoiceId: invoice.invoiceId, customer: invoice.customerName },
-    });
+    invoice.status = 'RECONCILED'; invoice.paidAt = receipt.timestamp;
+    invoice.paymentMethod = params.paymentMethod; invoice.paymentReferenceId = params.paymentReferenceId;
+    const prospect = this.prospects.get(invoice.customerProspectId);
+    if (prospect) { prospect.stage = 'RECONCILED'; prospect.updatedAt = new Date().toISOString(); }
 
     this.persistToDisk();
     return invoice;
@@ -293,7 +285,7 @@ class CustomerRevenueService {
     const prospectsList = Array.from(this.prospects.values());
     const invoicesList = Array.from(this.invoices.values());
 
-    const paidInvoices = invoicesList.filter((inv) => inv.status === 'PAID' || inv.status === 'RECONCILED');
+    const paidInvoices = invoicesList.filter(inv => inv.status === 'RECONCILED' && financialLedger.getAllEntries().some(e => e.metadata?.invoiceId === inv.invoiceId && e.providerTransactionId === inv.paymentReferenceId && e.state === 'CONFIRMED' && !e.isSimulated && e.verificationStatus === 'VERIFIED'));
     const totalCollectedRevenueUsd = paidInvoices.reduce((sum, inv) => sum + inv.totalUsd, 0);
     const totalCollectedRevenueZar = paidInvoices.reduce((sum, inv) => sum + inv.totalZar, 0);
 

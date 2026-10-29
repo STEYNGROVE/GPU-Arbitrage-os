@@ -19,6 +19,8 @@ export interface AppConfig {
     apiKey: string;
     hasLiveKey: boolean;
     primaryModel: string;
+    baseUrl?: string;
+    enabled?: boolean;
   };
   binance: {
     apiKey: string;
@@ -58,9 +60,8 @@ export interface AppConfig {
 }
 
 function resolveOperatingMode(): OperatingMode {
-  const envMode = process.env.SYSTEM_OPERATING_MODE || process.env.NODE_ENV;
-  if (envMode === 'production' || envMode === 'PRODUCTION') {
-    // Only allow true production mode if real keys are supplied, otherwise force simulation for safety
+  const envMode = process.env.SYSTEM_OPERATING_MODE;
+  if (envMode === 'PRODUCTION' || envMode === 'production') {
     return 'PRODUCTION';
   }
   return 'SIMULATION';
@@ -71,29 +72,37 @@ const isProduction = operatingMode === 'PRODUCTION';
 if (isProduction) {
   const requiredSecrets = ['API_AUTH_TOKEN', 'OWNER_API_KEY', 'OWNER_OVERRIDE_KEY', 'PGPASSWORD'];
   const missing = requiredSecrets.filter((key) => !process.env[key] || process.env[key]!.length < 32);
+  const authSecrets = ['API_AUTH_TOKEN', 'OWNER_API_KEY'].map((key) => process.env[key]);
+  if (new Set(authSecrets).size !== authSecrets.length) throw new Error('Production secrets must be independent.');
   if (missing.length) throw new Error(`Production startup blocked: missing or weak required secrets: ${missing.join(', ')}`);
 }
+
+const defaultOperatorKey = 'gpu_arb_simulation_operator_key_32c';
+const defaultOwnerKey = 'gpu_arb_simulation_owner_master_key_32c';
 
 export const config: AppConfig = {
   operatingMode,
   isProduction,
   isSimulation: !isProduction,
   port: Number(process.env.PORT) || 3000,
-  apiAuthToken: process.env.API_AUTH_TOKEN || '',
-  ownerApiKey: process.env.OWNER_API_KEY || '',
+  apiAuthToken: process.env.API_AUTH_TOKEN || (isProduction ? '' : defaultOperatorKey),
+  ownerApiKey: process.env.OWNER_API_KEY || (isProduction ? '' : defaultOwnerKey),
   ownerOverrideKey: process.env.OWNER_OVERRIDE_KEY || '',
   bridgeUrl: process.env.V13_BRIDGE_URL || '',
   bridgeToken: process.env.V13_BRIDGE_TOKEN || '',
   appUrl: process.env.APP_URL || 'http://localhost:3000',
   geminiApiKey: process.env.GEMINI_API_KEY || '',
   groq: {
-    apiKey: process.env.GROQ_API_KEY || '',
+    apiKey: process.env.GROQ_API_KEY && process.env.GROQ_API_KEY !== 'YOUR_GROQ_API_KEY_HERE' ? process.env.GROQ_API_KEY : '',
     hasLiveKey: Boolean(
       process.env.GROQ_API_KEY &&
       process.env.GROQ_API_KEY !== 'MY_GROQ_API_KEY' &&
+      process.env.GROQ_API_KEY !== 'YOUR_GROQ_API_KEY_HERE' &&
       process.env.GROQ_API_KEY.startsWith('gsk_')
     ),
-    primaryModel: process.env.GROQ_PRIMARY_MODEL || 'qwen/qwen3.8-27b',
+    primaryModel: process.env.GROQ_MODEL || process.env.GROQ_PRIMARY_MODEL || 'llama-3.3-70b-versatile',
+    baseUrl: process.env.GROQ_API_BASE_URL || 'https://api.groq.com/openai/v1',
+    enabled: process.env.GROQ_ENABLED !== 'false',
   },
   binance: {
     apiKey: process.env.BINANCE_API_KEY || '',
@@ -104,9 +113,9 @@ export const config: AppConfig = {
       process.env.BINANCE_API_KEY !== 'MY_BINANCE_API_KEY' &&
       process.env.BINANCE_SECRET_KEY !== 'MY_BINANCE_SECRET_KEY'
     ),
-    targetUid: process.env.BINANCE_TARGET_UID || '16863338',
-    primaryEvmAddress: process.env.SYSTEM_USDT_ADDRESS || '0x5d3fe4ac4cdcb3a6065bd4cbb528b7f72cca618d',
-    tronAddress: process.env.SYSTEM_TRON_ADDRESS || 'TYP5q9G6N1m8xK7uP4bQ9xV3rE4aZ8wQpL',
+    targetUid: process.env.BINANCE_TARGET_UID || '',
+    primaryEvmAddress: process.env.SYSTEM_USDT_ADDRESS || '',
+    tronAddress: process.env.SYSTEM_TRON_ADDRESS || '',
   },
   postgres: {
     host: process.env.PGHOST || 'localhost',
@@ -141,16 +150,5 @@ export const config: AppConfig = {
   },
   trustedIps: process.env.TRUSTED_IPS
     ? process.env.TRUSTED_IPS.split(',').map((ip) => ip.trim()).filter(Boolean)
-    : [
-        '127.0.0.1',
-        '::1',
-        '::ffff:127.0.0.1',
-        'localhost',
-        '34.96.39.119',
-        '35.242.198',
-        '35.242.198.112',
-        '10.0.0.0/8',
-        '172.16.0.0/12',
-        '192.168.0.0/16',
-      ],
+    : ['127.0.0.1', '::1'],
 };

@@ -27,14 +27,20 @@ export interface ProviderVerificationStatus {
 
 class ProviderVerificationService {
   private runpodApiKey: string = process.env.RUNPOD_API_KEY || '';
+  private vastApiKey: string = process.env.VAST_AI_API_KEY || '';
   private lightningApiKey: string = process.env.LIGHTNING_AI_API_KEY || process.env.LIGHTNING_API_KEY || '';
-  private runpodReportedFunded: boolean = true; // Operator flagged as funded
-  private lightningReportedFunded: boolean = true; // Operator flagged as funded
+  private runpodReportedFunded: boolean = true;
+  private lightningReportedFunded: boolean = false;
   private cachedRunpodBalance: number | null = null;
+  private cachedVastBalance: number | null = null;
   private cachedLightningBalance: number | null = null;
 
   public setRunpodKey(key: string) {
     this.runpodApiKey = key.trim();
+  }
+
+  public setVastKey(key: string) {
+    this.vastApiKey = key.trim();
   }
 
   public setLightningKey(key: string) {
@@ -55,13 +61,15 @@ class ProviderVerificationService {
       return {
         success: false,
         balanceUsd: this.cachedRunpodBalance,
-        error: 'RunPod API key not provided. Operator flagged as funded; enter API key to query exact live credits.',
+        error: 'RunPod API key not provided.',
       };
     }
 
     try {
-      const response = await fetch('https://api.runpod.io/graphql', {
+      const url = `https://api.runpod.io/graphql?api_key=${encodeURIComponent(key)}`;
+      const response = await fetch(url, {
         method: 'POST',
+        signal: AbortSignal.timeout(10000),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${key}`,
@@ -72,7 +80,7 @@ class ProviderVerificationService {
               myself {
                 id
                 email
-                balance
+                clientBalance
               }
             }
           `,
@@ -97,7 +105,11 @@ class ProviderVerificationService {
       }
 
       const myself = json.data?.myself;
-      const balance = Number(myself?.balance) || 0;
+      const rawBalance = myself?.clientBalance ?? myself?.balance;
+      const balance = Number(rawBalance);
+      if (!myself || rawBalance === null || rawBalance === undefined || !Number.isFinite(balance) || balance < 0) {
+        throw new Error('Provider response has no valid balance.');
+      }
       this.cachedRunpodBalance = balance;
       this.runpodApiKey = key;
 
@@ -111,6 +123,64 @@ class ProviderVerificationService {
         success: false,
         balanceUsd: null,
         error: `Network error connecting to RunPod: ${err.message}`,
+      };
+    }
+  }
+
+  /**
+   * Check Vast.ai live balance via official REST endpoint
+   */
+  public async verifyVast(apiKeyOverride?: string): Promise<{
+    success: boolean;
+    balanceUsd: number | null;
+    email?: string;
+    error?: string;
+  }> {
+    const key = (apiKeyOverride || this.vastApiKey || process.env.VAST_AI_API_KEY || '').trim();
+    if (!key) {
+      return {
+        success: false,
+        balanceUsd: this.cachedVastBalance,
+        error: 'Vast.ai API key not provided.',
+      };
+    }
+
+    try {
+      const response = await fetch('https://console.vast.ai/api/v0/users/current/', {
+        signal: AbortSignal.timeout(10000),
+        headers: {
+          'Authorization': `Bearer ${key}`,
+          'Accept': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        return {
+          success: false,
+          balanceUsd: null,
+          error: `Vast.ai API returned HTTP ${response.status}`,
+        };
+      }
+
+      const data = (await response.json()) as any;
+      const rawCredit = data?.credit ?? data?.balance;
+      const credit = Number(rawCredit);
+      if (rawCredit === undefined || rawCredit === null || !Number.isFinite(credit) || credit < 0) {
+        throw new Error('Vast.ai response did not include a valid credit balance.');
+      }
+      this.cachedVastBalance = credit;
+      this.vastApiKey = key;
+
+      return {
+        success: true,
+        balanceUsd: credit,
+        email: data?.email || data?.username,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        balanceUsd: null,
+        error: `Network error connecting to Vast.ai: ${err.message}`,
       };
     }
   }
@@ -134,6 +204,7 @@ class ProviderVerificationService {
 
     try {
       const response = await fetch('https://lightning.ai/api/v1/auth/user', {
+        signal: AbortSignal.timeout(10000),
         headers: {
           'Authorization': `Bearer ${key}`,
           'Accept': 'application/json',
@@ -149,7 +220,9 @@ class ProviderVerificationService {
       }
 
       const data = (await response.json()) as any;
-      const credits = Number(data?.credits || data?.balance) || 0;
+      const rawCredits = data?.credits ?? data?.balance;
+      const credits = Number(rawCredits);
+      if (rawCredits === undefined || rawCredits === null || !Number.isFinite(credits) || credits < 0) throw new Error('Provider response did not include a valid credit balance.');
       this.cachedLightningBalance = credits;
       this.lightningApiKey = key;
 
@@ -173,6 +246,7 @@ class ProviderVerificationService {
     // 1. RunPod live probe if key exists
     let runpodVerified = false;
     let runpodBalance = this.cachedRunpodBalance;
+    let runpodEmail = '';
     let runpodError = '';
 
     if (this.runpodApiKey) {
@@ -180,12 +254,30 @@ class ProviderVerificationService {
       if (runpodRes.success) {
         runpodVerified = true;
         runpodBalance = runpodRes.balanceUsd;
+        runpodEmail = runpodRes.email || '';
       } else {
         runpodError = runpodRes.error || '';
       }
     }
 
-    // 2. Lightning AI live probe if key exists
+    // 2. Vast.ai live probe if key exists
+    let vastVerified = false;
+    let vastBalance = this.cachedVastBalance;
+    let vastEmail = '';
+    let vastError = '';
+
+    if (this.vastApiKey) {
+      const vastRes = await this.verifyVast();
+      if (vastRes.success) {
+        vastVerified = true;
+        vastBalance = vastRes.balanceUsd;
+        vastEmail = vastRes.email || '';
+      } else {
+        vastError = vastRes.error || '';
+      }
+    }
+
+    // 3. Lightning AI live probe if key exists
     let lightningVerified = false;
     let lightningBalance = this.cachedLightningBalance;
     let lightningError = '';
@@ -222,49 +314,52 @@ class ProviderVerificationService {
         providerId: 'runpod',
         providerName: 'RunPod Community & Secure Cloud',
         category: 'GPU_COMPUTE_CLOUD',
-        verificationLevel: runpodVerified ? 'LIVE_API_VERIFIED' : 'OPERATOR_REPORTED_FUNDED',
+        verificationLevel: runpodVerified ? 'LIVE_API_VERIFIED' : 'AWAITING_CREDENTIALS',
         isLiveConnected: runpodVerified,
-        isExecutable: false, // Non-executable until live fresh quote and instance availability confirmed
+        isExecutable: runpodVerified && (runpodBalance ?? 0) > 0,
         currency: 'USD',
-        balance: runpodBalance,
-        balanceUsd: runpodBalance,
-        accountIdentifier: 'RunPod Cloud Billing',
+        balance: runpodVerified ? runpodBalance : null,
+        balanceUsd: runpodVerified ? runpodBalance : null,
+        accountIdentifier: runpodEmail ? `RunPod: ${runpodEmail}` : 'RunPod Cloud Billing',
         notes: runpodVerified
-          ? `Verified via official RunPod GraphQL API. Active balance: $${runpodBalance?.toFixed(2)}.`
-          : 'Operator confirmed account is funded. Enter RunPod API key to synchronize exact live balance to the cent.',
+          ? `Verified via official RunPod GraphQL API. Real funded client balance: $${runpodBalance?.toFixed(2)} USD.`
+          : 'Account funding unverified. Configure a key to check provider credits.',
         lastCheckedAt: now,
         apiEndpoint: 'https://api.runpod.io/graphql',
-      },
-      {
-        providerId: 'lightning-ai',
-        providerName: 'Lightning AI Studios',
-        category: 'GPU_COMPUTE_CLOUD',
-        verificationLevel: lightningVerified ? 'LIVE_API_VERIFIED' : 'OPERATOR_REPORTED_FUNDED',
-        isLiveConnected: lightningVerified,
-        isExecutable: false,
-        currency: 'USD',
-        balance: lightningBalance,
-        balanceUsd: lightningBalance,
-        accountIdentifier: 'Lightning AI Compute Credit',
-        notes: lightningVerified
-          ? `Verified via Lightning AI Studios API. Active balance: $${lightningBalance?.toFixed(2)}.`
-          : 'Operator confirmed account is funded. Enter Lightning API key to synchronize exact live credits.',
-        lastCheckedAt: now,
-        apiEndpoint: 'https://lightning.ai/api/v1',
       },
       {
         providerId: 'vast-ai',
         providerName: 'Vast.ai Spot Fabric',
         category: 'GPU_COMPUTE_CLOUD',
-        verificationLevel: 'BENCHMARK_NON_EXECUTABLE',
-        isLiveConnected: false,
+        verificationLevel: vastVerified ? 'LIVE_API_VERIFIED' : 'BENCHMARK_NON_EXECUTABLE',
+        isLiveConnected: vastVerified,
+        isExecutable: vastVerified && (vastBalance ?? 0) > 0,
+        currency: 'USD',
+        balance: vastVerified ? vastBalance : 0.00,
+        balanceUsd: vastVerified ? vastBalance : 0.00,
+        accountIdentifier: vastEmail ? `Vast.ai: ${vastEmail}` : 'Public Spot Market Reference',
+        notes: vastVerified
+          ? `Verified via official Vast.ai REST API. Real funded balance: $${vastBalance?.toFixed(2)} USD.`
+          : 'Public benchmark catalog quotes ($1.74/hr H100 SXM5). Requires verified provider adapter before execution.',
+        lastCheckedAt: now,
+        apiEndpoint: 'https://console.vast.ai/api/v0',
+      },
+      {
+        providerId: 'lightning-ai',
+        providerName: 'Lightning AI Studios',
+        category: 'GPU_COMPUTE_CLOUD',
+        verificationLevel: lightningVerified ? 'LIVE_API_VERIFIED' : 'AWAITING_CREDENTIALS',
+        isLiveConnected: lightningVerified,
         isExecutable: false,
         currency: 'USD',
-        balance: 0.00,
-        balanceUsd: 0.00,
-        accountIdentifier: 'Public Spot Market Reference',
-        notes: 'Public benchmark catalog quotes ($1.74/hr H100 SXM5). Requires verified provider adapter before execution.',
+        balance: lightningVerified ? lightningBalance : null,
+        balanceUsd: lightningVerified ? lightningBalance : null,
+        accountIdentifier: 'Lightning AI Compute Credit',
+        notes: lightningVerified
+          ? `Verified via Lightning AI Studios API. Active balance: $${lightningBalance?.toFixed(2)}.`
+          : 'Account funding unverified. Configure a key to check provider credits.',
         lastCheckedAt: now,
+        apiEndpoint: 'https://lightning.ai/api/v1',
       },
       {
         providerId: 'akash',

@@ -6,7 +6,7 @@ import { config } from './config.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const LEDGER_STORAGE_PATH = path.resolve(__dirname, '../data/financial_ledger.json');
+const LEDGER_STORAGE_PATH = path.resolve(process.env.APP_DATA_DIR || path.join(__dirname, '../data'), 'financial_ledger.json');
 
 export type TransactionState =
   | 'CREATED'
@@ -142,7 +142,7 @@ class FinancialLedgerService {
         }
       }
     } catch (err: any) {
-      console.warn('[Financial Ledger] Disk storage notice:', err.message);
+      throw new Error('Financial ledger could not be loaded: ' + err.message);
     }
   }
 
@@ -153,9 +153,12 @@ class FinancialLedgerService {
         fs.mkdirSync(dataDir, { recursive: true });
       }
       const serialized = JSON.stringify(Array.from(this.entries.values()), null, 2);
-      fs.writeFileSync(LEDGER_STORAGE_PATH, serialized, 'utf-8');
+      const temporary = LEDGER_STORAGE_PATH + '.tmp';
+      const fd = fs.openSync(temporary, 'w', 0o600);
+      try { fs.writeFileSync(fd, serialized, 'utf-8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      fs.renameSync(temporary, LEDGER_STORAGE_PATH);
     } catch (err: any) {
-      console.error('[Financial Ledger] Persist error:', err.message);
+      throw new Error('Financial ledger persistence failed: ' + err.message);
     }
   }
 
@@ -179,11 +182,20 @@ class FinancialLedgerService {
     actor?: string;
     metadata?: Record<string, any>;
   }): LedgerEntry {
+    if (!params.idempotencyKey || !Number.isFinite(params.amount) || params.amount <= 0 ||
+        !Number.isFinite(params.fee ?? 0) || (params.fee ?? 0) < 0 ||
+        (params.debitCredit === 'CREDIT' && (params.fee ?? 0) > params.amount)) {
+      throw new Error('Invalid transaction amount, fee or idempotency key.');
+    }
     // Idempotency Check: if identical key exists, return existing entry to prevent double-spending
     if (this.idempotencyIndex.has(params.idempotencyKey)) {
       const existingId = this.idempotencyIndex.get(params.idempotencyKey)!;
       const existing = this.entries.get(existingId);
       if (existing) {
+        if (existing.amount !== params.amount || existing.asset !== params.asset || existing.type !== params.type ||
+            existing.provider !== params.provider || existing.fee !== (params.fee ?? 0) ||
+            existing.debitCredit !== params.debitCredit || existing.destinationAddress !== params.destinationAddress ||
+            existing.network !== params.network || existing.accountType !== params.accountType) throw new Error('Idempotency key conflicts with existing transaction.');
         console.log(`[Financial Ledger ℹ️ Idempotent Replay] Transaction ${existing.id} already exists for key: ${params.idempotencyKey}`);
         return existing;
       }
@@ -225,7 +237,9 @@ class FinancialLedgerService {
 
     this.entries.set(id, entry);
     this.idempotencyIndex.set(params.idempotencyKey, id);
-    this.persistToDisk();
+    try { this.persistToDisk(); } catch (err) {
+      this.entries.delete(id); this.idempotencyIndex.delete(params.idempotencyKey); throw err;
+    }
 
     console.log(`[Financial Ledger 📝 Created] ${id} | ${params.type} ${params.amount} ${params.asset} | Simulated: ${isSimulated}`);
     return entry;
@@ -268,6 +282,11 @@ class FinancialLedgerService {
       );
     }
 
+    const previous = structuredClone(entry);
+    if (nextState === 'CONFIRMED' && !entry.isSimulated &&
+        (!details.providerTransactionId || details.verificationStatus !== 'VERIFIED')) {
+      throw new Error('Live confirmation requires provider transaction evidence.');
+    }
     entry.state = nextState;
     if (details.providerTransactionId) entry.providerTransactionId = details.providerTransactionId;
     if (details.txHash) entry.txHash = details.txHash;
@@ -284,7 +303,7 @@ class FinancialLedgerService {
       actor: details.actor || 'SYSTEM_LEDGER',
     });
 
-    this.persistToDisk();
+    try { this.persistToDisk(); } catch (err) { this.entries.set(transactionId, previous); throw err; }
     console.log(`[Financial Ledger 🔄 Transition] ${transactionId} -> ${nextState} (${details.notes || ''})`);
     return entry;
   }
@@ -310,7 +329,7 @@ class FinancialLedgerService {
     gotymeAvailablePhp?: number;
   }): CFOBreakdownSummary {
     const all = Array.from(this.entries.values());
-    const confirmed = all.filter((e) => e.state === 'CONFIRMED');
+    const confirmed = all.filter((e) => e.state === 'CONFIRMED' && !e.isSimulated && e.verificationStatus === 'VERIFIED');
     const pending = all.filter((e) => e.state === 'PENDING' || e.state === 'SUBMITTED');
 
     // Aggregate confirmed customer receipts
@@ -323,9 +342,9 @@ class FinancialLedgerService {
       .reduce((sum, e) => sum + e.amount, 0);
 
     // Aggregate confirmed provider compute expenses
-    const computeExpenses = confirmed.filter((e) => e.type === 'COMPUTE_LEASE_PAYMENT');
+    const computeExpenses = confirmed.filter((e) => e.type === 'COMPUTE_LEASE_PAYMENT' && ['USD', 'USDT'].includes(e.asset));
     const totalComputeCostsUsd = computeExpenses.reduce((sum, e) => sum + e.amount, 0);
-    const providerFeesUsd = confirmed.reduce((sum, e) => sum + e.fee, 0);
+    const providerFeesUsd = confirmed.filter(e => ['USD', 'USDT'].includes(e.asset)).reduce((sum, e) => sum + e.fee, 0);
 
     // Pending transfers
     const pendingDeposits = pending
@@ -337,7 +356,7 @@ class FinancialLedgerService {
 
     // Realised revenue and profit (Strict GAAP recognition: only from confirmed customer receipts minus confirmed expenses)
     const realisedRevenueUsd = totalReceiptsUsd;
-    const realisedProfitUsd = Math.max(0, realisedRevenueUsd - totalComputeCostsUsd - providerFeesUsd);
+    const realisedProfitUsd = realisedRevenueUsd - totalComputeCostsUsd - providerFeesUsd;
 
     // External balances check
     const isLiveBinance = Boolean(externalBalances?.binanceIsLive);
@@ -362,7 +381,7 @@ class FinancialLedgerService {
 
     // Variance calculation between internal ledger and verified external balance
     const variance = isLiveBinance ? Math.abs(verifiedSpotUsd - internalNetUsd) : 0;
-    const isBalanced = isLiveBinance ? variance < 1.0 : true;
+    const isBalanced = isLiveBinance ? variance < 0.005 : true;
 
     return {
       mode: config.operatingMode === 'PRODUCTION' ? 'PRODUCTION' : 'SIMULATION',
@@ -381,7 +400,7 @@ class FinancialLedgerService {
           totalUsd: Number(internalNetUsd.toFixed(2)),
           totalZar: totalReceiptsZar,
           entriesCount: all.length,
-          status: config.isProduction ? 'VERIFIED' : 'SIMULATED',
+          status: 'PENDING',
         },
         pendingDepositsAndWithdrawals: {
           pendingDepositsUsd: Number(pendingDeposits.toFixed(2)),
@@ -399,7 +418,7 @@ class FinancialLedgerService {
           providerFeesUsd: Number(providerFeesUsd.toFixed(2)),
         },
         revenueMetrics: {
-          estimatedRevenueUsd: Number((realisedRevenueUsd * 1.25).toFixed(2)),
+          estimatedRevenueUsd: 0,
           realisedRevenueUsd: Number(realisedRevenueUsd.toFixed(2)),
           realisedProfitUsd: Number(realisedProfitUsd.toFixed(2)),
           calculationMethod: 'GAAP_CONSERVATIVE_ACCRUAL',
@@ -411,7 +430,7 @@ class FinancialLedgerService {
         },
       },
       reconciliationAudit: {
-        status: !isLiveBinance && config.isProduction ? 'NOT_CONNECTED' : isBalanced ? 'BALANCED' : 'DISCREPANCY_DETECTED',
+        status: !isLiveBinance ? 'NOT_CONNECTED' : isBalanced ? 'BALANCED' : 'DISCREPANCY_DETECTED',
         varianceUsd: Number(variance.toFixed(2)),
         lastReconciledAt: new Date().toISOString(),
         auditNotes: [
@@ -423,6 +442,27 @@ class FinancialLedgerService {
         ],
       },
     };
+  }
+
+  public clearAllEntries(): number {
+    const count = this.entries.size;
+    this.entries.clear();
+    this.persistToDisk();
+    return count;
+  }
+
+  public clearSweeps(): number {
+    let removed = 0;
+    for (const [id, entry] of Array.from(this.entries.entries())) {
+      if (entry.type === 'PROFIT_SWEEP') {
+        this.entries.delete(id);
+        removed++;
+      }
+    }
+    if (removed > 0) {
+      this.persistToDisk();
+    }
+    return removed;
   }
 }
 

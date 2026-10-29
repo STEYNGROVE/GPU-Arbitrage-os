@@ -29,11 +29,11 @@ class GitHubSyncService {
   private committerEmail: string = config.github.committerEmail;
   private committerName: string = config.github.committerName;
   private accessToken?: string = config.github.token;
-  private lastSyncedAt: string = new Date().toISOString();
+  private lastSyncedAt: string = '';
   private lastKnownSha?: string;
   private lastLocalCommitSha?: string;
   private autoSyncInterval: NodeJS.Timeout | null = null;
-  private autoSyncActive: boolean = true;
+  private autoSyncActive: boolean = false;
   private autoSyncIntervalMs: number = 60000;
   private totalSyncCyclesCompleted: number = 0;
   private syncLogs: Array<{
@@ -47,11 +47,11 @@ class GitHubSyncService {
     this.addLog(
       'SERVICE_INITIALIZED',
       'INFO',
-      `Target upstream: ${this.upstreamRepo}. Automated GitHub Sync & Copy: ACTIVE (Every ${this.autoSyncIntervalMs / 1000}s).`
+      `Target upstream: ${this.upstreamRepo}. Automated GitHub Sync & Copy: DISABLED (Every ${this.autoSyncIntervalMs / 1000}s).`
     );
 
     // Automatically boot continuous background sync and copy loop
-    this.startContinuousSync(this.autoSyncIntervalMs);
+    // Explicit operator action required; no background pushes.
   }
 
   public startContinuousSync(intervalMs: number = 60000): void {
