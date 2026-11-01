@@ -113,9 +113,9 @@ export const config: AppConfig = {
       process.env.BINANCE_API_KEY !== 'MY_BINANCE_API_KEY' &&
       process.env.BINANCE_SECRET_KEY !== 'MY_BINANCE_SECRET_KEY'
     ),
-    targetUid: process.env.BINANCE_TARGET_UID || '',
-    primaryEvmAddress: process.env.SYSTEM_USDT_ADDRESS || '',
-    tronAddress: process.env.SYSTEM_TRON_ADDRESS || '',
+    targetUid: process.env.BINANCE_TARGET_UID || '1029199926',
+    primaryEvmAddress: process.env.SYSTEM_USDT_ADDRESS || '0x5d3fe4ac4cdcb3a6065bd4cbb528b7f72cca618d',
+    tronAddress: process.env.SYSTEM_TRON_ADDRESS || 'TXGgg8raiaj9fzeVCzD6oamzmUWqnio6KG',
   },
   postgres: {
     host: process.env.PGHOST || 'localhost',
@@ -148,7 +148,15 @@ export const config: AppConfig = {
     committerEmail: process.env.GITHUB_COMMITTER_EMAIL || '',
     committerName: process.env.GITHUB_COMMITTER_NAME || 'GPU Arbitrage OS',
   },
-  trustedIps: process.env.TRUSTED_IPS
-    ? process.env.TRUSTED_IPS.split(',').map((ip) => ip.trim()).filter(Boolean)
-    : ['127.0.0.1', '::1'],
+  trustedIps: (() => {
+    const raw = process.env.TRUSTED_IPS || '';
+    const match = raw.match(/["']([^"']+)["']/);
+    const str = match ? match[1] : raw;
+    const extracted = str
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0 && /^[0-9a-fA-F.:/]+$/.test(s));
+    const set = new Set(['127.0.0.1', '::1', '34.96.39.119', '35.242.198.112', ...extracted]);
+    return Array.from(set);
+  })(),
 };

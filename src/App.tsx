@@ -45,6 +45,7 @@ import { FullSystemAuditModal } from './components/FullSystemAuditModal';
 import { SystemMemoryModal } from './components/SystemMemoryModal';
 import { PlatformSettingsModal } from './components/PlatformSettingsModal';
 import { GroqAiConsoleModal } from './components/GroqAiConsoleModal';
+import { getAuthToken, setAuthToken, authenticatedFetch } from './apiSession';
 
 export const API_AUTH_HEADERS = {
   'Content-Type': 'application/json',
@@ -95,7 +96,7 @@ export default function App() {
 
   // Complete System Memory Synchronizer
   const syncSystemMemory = (slice: any, reason?: string) => {
-    fetch('/api/system/memory/save', {
+    authenticatedFetch('/api/system/memory/save', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ state: slice, reason: reason || 'Live State Mutation' }),
@@ -106,7 +107,7 @@ export default function App() {
   };
 
   const rehydrateFromMemory = () => {
-    fetch('/api/system/memory')
+    authenticatedFetch('/api/system/memory')
       .then((res) => res.json())
       .then((data) => {
         if (data.success && data.state) {
@@ -136,12 +137,8 @@ export default function App() {
       });
   };
 
-  // Initial load from Persistent Complete Memory on Mount
-  useEffect(() => {
-    rehydrateFromMemory();
-    fetchRealSystemLogs();
-
-    fetch('/api/binance/account')
+  const fetchBinanceAccount = () => {
+    authenticatedFetch('/api/binance/account')
       .then((res) => res.json())
       .then((data) => {
         if (data && data.ownerEmail) {
@@ -152,6 +149,24 @@ export default function App() {
         }
       })
       .catch(() => {});
+  };
+
+  // Initial load from Persistent Complete Memory on Mount
+  useEffect(() => {
+    // Acquire session token if on authorized environment
+    fetch('/api/auth/session-token')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.token) {
+          setAuthToken(data.token);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        rehydrateFromMemory();
+        fetchRealSystemLogs();
+        fetchBinanceAccount();
+      });
 
     fetch('/api/binance/depin-tickers')
       .then((res) => res.json())
@@ -168,7 +183,8 @@ export default function App() {
         }
       })
       .catch(() => {});
-    fetch('/api/binance/transfers')
+
+    authenticatedFetch('/api/binance/transfers')
       .then((res) => res.json())
       .then((trfs) => {
         if (Array.isArray(trfs) && trfs.length > 0) {
@@ -227,7 +243,7 @@ export default function App() {
         .catch(() => {});
 
       // 3. Keep live exchange balances and system memory continuously synchronized
-      fetch('/api/binance/account')
+      authenticatedFetch('/api/binance/account')
         .then((res) => res.json())
         .then((acct) => {
           if (acct && acct.ownerEmail && typeof acct.usdtBalance === 'number') {
@@ -385,7 +401,7 @@ export default function App() {
   // Binance Handlers
   const handleSweepProfits = (amount: number) => {
     // Send to backend Node.js / Express Server API
-    fetch('/api/binance/sweep', {
+    authenticatedFetch('/api/binance/sweep', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ amount }),
@@ -393,73 +409,41 @@ export default function App() {
       .then((res) => res.json())
       .then((result) => {
         if (result && result.success) {
-          fetch('/api/binance/account')
+          authenticatedFetch('/api/binance/account')
             .then((r) => r.json())
             .then((acct) => {
               if (acct && acct.ownerEmail) setBinanceAccount(acct);
             });
-          fetch('/api/binance/transfers')
+          authenticatedFetch('/api/binance/transfers')
             .then((r) => r.json())
             .then((trfs) => {
               if (Array.isArray(trfs) && trfs.length > 0) setTransfers(trfs);
             });
+
+          // Reset accrued contract PnL
+          setActiveContracts((prev) =>
+            prev.map((c) => ({
+              ...c,
+              totalAccruedPnL: 0,
+            }))
+          );
+
+          const now = new Date();
+          const timeStr = now.toTimeString().split(' ')[0];
+          const newLog: ExecutionLog = {
+            id: `log-${Date.now()}`,
+            timestamp: timeStr,
+            level: 'ORDER_EXEC',
+            service: 'binance_gateway',
+            message: `Binance Profit Sweep Confirmed: +$${amount.toFixed(2)} USDT swept from compute lease escrow into Binance Institutional Master Spot Account UID ${binanceAccount.binanceUid}.`,
+            latencyMs: 6.8,
+          };
+          setLogs((prev) => [newLog, ...prev]);
+        } else {
+          console.warn('Backend sweep notice:', result?.error || 'Live Binance connection required for sweep');
         }
       })
       .catch((err) => console.warn('Backend sweep sync warning:', err));
-
-    const updatedUsdt = Number((binanceAccount.usdtBalance + amount).toFixed(2));
-    const updatedEquity = Number((binanceAccount.totalEquityUsd + amount).toFixed(2));
-    const updatedAccount = {
-      ...binanceAccount,
-      usdtBalance: updatedUsdt,
-      sweptProfitsUsd: Number(((binanceAccount.sweptProfitsUsd || 0) + amount).toFixed(2)),
-      totalEquityUsd: updatedEquity,
-    };
-    setBinanceAccount(updatedAccount);
-
-    // Reset accrued contract PnL
-    const updatedContracts = activeContracts.map((c) => ({
-      ...c,
-      totalAccruedPnL: 0,
-    }));
-    setActiveContracts(updatedContracts);
-
-    const now = new Date();
-    const timeStr = now.toTimeString().split(' ')[0];
-    const newTransfer: BinanceTransfer = {
-      id: `SWP-${Date.now()}`,
-      timestamp: timeStr,
-      type: 'PROFIT_SWEEP',
-      asset: 'USDT',
-      amount: Number(amount.toFixed(2)),
-      status: 'CONFIRMED',
-      providerRef: 'BINANCE_INTERNAL_MASTER_ACCOUNT',
-      destinationAddress: '0x5d3fe4ac4cdcb3a6065bd4cbb528b7f72cca618d',
-      network: 'BNB Smart Chain (BEP20)',
-    };
-    const updatedTransfers = [newTransfer, ...transfers];
-    setTransfers(updatedTransfers);
-
-    const newLog: ExecutionLog = {
-      id: `log-${Date.now()}`,
-      timestamp: timeStr,
-      level: 'ORDER_EXEC',
-      service: 'binance_gateway',
-      message: `Binance Profit Sweep Confirmed: +$${amount.toFixed(2)} USDT swept from compute lease escrow into Binance Institutional Master Spot Account.`,
-      latencyMs: 6.8,
-    };
-    const updatedLogs = [newLog, ...logs];
-    setLogs(updatedLogs);
-
-    syncSystemMemory(
-      {
-        binanceAccount: updatedAccount,
-        activeContracts: updatedContracts,
-        transfers: updatedTransfers,
-        logs: updatedLogs,
-      },
-      `Binance Profit Sweep +$${amount} USDT`
-    );
   };
 
   const handleToggleAutoSweep = () => {
@@ -533,50 +517,32 @@ export default function App() {
       body: JSON.stringify({ amount, network, address }),
     })
       .then((res) => res.json())
+      .then((data) => {
+        if (data && data.success) {
+          fetch('/api/binance/account')
+            .then((r) => r.json())
+            .then((acct) => {
+              if (acct && acct.ownerEmail) setBinanceAccount(acct);
+            });
+          fetch('/api/binance/transfers')
+            .then((r) => r.json())
+            .then((trfs) => {
+              if (Array.isArray(trfs) && trfs.length > 0) setTransfers(trfs);
+            });
+          const now = new Date();
+          const timeStr = now.toTimeString().split(' ')[0];
+          const newLog: ExecutionLog = {
+            id: `log-${Date.now()}`,
+            timestamp: timeStr,
+            level: 'ORDER_EXEC',
+            service: 'binance_gateway',
+            message: `Deposit Instruction Registered: +$${amount.toFixed(2)} USDT on ${network} to ${data.targetAddress || address || '0x5d3fe4ac4cdcb3a6065bd4cbb528b7f72cca618d'} for Master UID ${binanceAccount.binanceUid}. Awaiting blockchain confirmation.`,
+            latencyMs: 5.4,
+          };
+          setLogs((prev) => [newLog, ...prev]);
+        }
+      })
       .catch((err) => console.warn('Backend deposit sync warning:', err));
-
-    const updatedAccount = {
-      ...binanceAccount,
-      usdtBalance: Number((binanceAccount.usdtBalance + amount).toFixed(2)),
-      totalEquityUsd: Number((binanceAccount.totalEquityUsd + amount).toFixed(2)),
-    };
-    setBinanceAccount(updatedAccount);
-
-    const now = new Date();
-    const timeStr = now.toTimeString().split(' ')[0];
-    const newTransfer: BinanceTransfer = {
-      id: `DEP-${Date.now()}`,
-      timestamp: timeStr,
-      type: 'DIRECT_DEPOSIT',
-      asset: 'USDT',
-      amount: Number(amount.toFixed(2)),
-      status: 'CONFIRMED',
-      network: network,
-      destinationAddress: address || '0x5d3fe4ac4cdcb3a6065bd4cbb528b7f72cca618d',
-      providerRef: 'BINANCE_SPOT_INBOUND',
-    };
-    const updatedTransfers = [newTransfer, ...transfers];
-    setTransfers(updatedTransfers);
-
-    const newLog: ExecutionLog = {
-      id: `log-${Date.now()}`,
-      timestamp: timeStr,
-      level: 'ORDER_EXEC',
-      service: 'binance_gateway',
-      message: `Direct Deposit Confirmed: +$${amount.toFixed(2)} USDT submitted to Binance address (${network}) for Master Account UID 16863338 (doppie104@gmail.com).`,
-      latencyMs: 5.4,
-    };
-    const updatedLogs = [newLog, ...logs];
-    setLogs(updatedLogs);
-
-    syncSystemMemory(
-      {
-        binanceAccount: updatedAccount,
-        transfers: updatedTransfers,
-        logs: updatedLogs,
-      },
-      `Direct Deposit +$${amount} USDT (${network})`
-    );
   };
 
   const handleExecuteWithdrawal = async (amount: number, network: string = 'BSC', address?: string) => {
@@ -604,12 +570,16 @@ export default function App() {
         throw new Error(data.message || data.error || 'Withdrawal failed');
       }
 
-      const updatedAccount = {
-        ...binanceAccount,
-        usdtBalance: Number((binanceAccount.usdtBalance - amount).toFixed(2)),
-        totalEquityUsd: Number((binanceAccount.totalEquityUsd - amount).toFixed(2)),
-      };
-      setBinanceAccount(updatedAccount);
+      fetch('/api/binance/account')
+        .then((r) => r.json())
+        .then((acct) => {
+          if (acct && acct.ownerEmail) setBinanceAccount(acct);
+        });
+      fetch('/api/binance/transfers')
+        .then((r) => r.json())
+        .then((trfs) => {
+          if (Array.isArray(trfs) && trfs.length > 0) setTransfers(trfs);
+        });
 
       const now = new Date();
       const timeStr = now.toTimeString().split(' ')[0];
@@ -628,25 +598,21 @@ export default function App() {
         providerRef: data.withdrawalId,
         isSimulated: data.isSimulated,
       };
-      const updatedTransfers = [newTransfer, ...transfers];
-      setTransfers(updatedTransfers);
+      setTransfers((prev) => [newTransfer, ...prev]);
 
       const newLog: ExecutionLog = {
         id: `log-${Date.now()}`,
         timestamp: timeStr,
         level: 'ORDER_EXEC',
         service: 'binance_gateway',
-        message: `Binance Withdrawal Confirmed: -$${amount.toFixed(2)} USDT transferred to verified Binance address ${data.targetAddress || address} (${network}) for UID 16863338. Funds reached Master Spot Wallet.`,
+        message: `Binance Withdrawal Confirmed: -$${amount.toFixed(2)} USDT transferred to verified Binance address ${data.targetAddress || address} (${network}) for UID ${binanceAccount.binanceUid}. Funds reached Master Spot Wallet.`,
         latencyMs: 4.8,
       };
-      const updatedLogs = [newLog, ...logs];
-      setLogs(updatedLogs);
+      setLogs((prev) => [newLog, ...prev]);
 
       syncSystemMemory(
         {
-          binanceAccount: updatedAccount,
-          transfers: updatedTransfers,
-          logs: updatedLogs,
+          logs: [newLog, ...logs],
         },
         `Binance Withdrawal -$${amount} USDT to ${data.targetAddress || address}`
       );
@@ -867,6 +833,7 @@ export default function App() {
         onOpenGroqAi={() => setIsGroqAiOpen(true)}
         discoveryWorkersCount={discoveryWorkers.length}
         optimizerWorkersCount={optimizerWorkers.length}
+        binanceUid={binanceAccount.binanceUid}
       />
 
       {/* Main Viewport Content */}

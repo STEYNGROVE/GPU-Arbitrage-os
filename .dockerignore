@@ -5,4 +5,7 @@ dist
 .env.*
 !.env.example
 data
+tests
+*.log
+.npm
 public/assets/aistudio

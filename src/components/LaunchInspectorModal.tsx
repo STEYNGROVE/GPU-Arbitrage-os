@@ -104,7 +104,7 @@ export const LaunchInspectorModal: React.FC<LaunchInspectorModalProps> = ({
     '[Bootstrap 2/4] Executing 36 PostgreSQL database relation migrations on arbitrage_v13...',
     '[Bootstrap 2/4] Migrations Completed: 36/36 relations synchronized.',
     '[Bootstrap 3/4] Initializing Jake Grove CFO Service and Binance Institutional Gateway...',
-    '[Bootstrap 3/4] Binance Connected: doppie104@gmail.com (UID: 16863338)',
+    '[Bootstrap 3/4] Binance Connected: doppie104@gmail.com (UID: 1029199926)',
     '[Bootstrap Upstream] GitHub Sync: STEYNGROVE/GPU-Arbitrage-os (Committer: doppie104 <doppie104@gmail.com>) [SYNCHRONIZED]',
     '[Bootstrap 4/4] Scaling microservice fleet (100 Autonomous Discovery / 50 Yield Optimizers)...',
     '==========================================================',
@@ -159,7 +159,7 @@ export const LaunchInspectorModal: React.FC<LaunchInspectorModalProps> = ({
         '[Bootstrap 2/4] Executing 36 PostgreSQL database relation migrations on arbitrage_v13...',
         '[Bootstrap 2/4] Migrations Completed: 36/36 relations synchronized.',
         '[Bootstrap 3/4] Initializing Jake Grove CFO Service and Binance Institutional Gateway...',
-        '[Bootstrap 3/4] Binance Connected: doppie104@gmail.com (UID: 16863338)',
+        '[Bootstrap 3/4] Binance Connected: doppie104@gmail.com (UID: 1029199926)',
         '[Bootstrap Upstream] GitHub Sync: STEYNGROVE/GPU-Arbitrage-os (Committer: doppie104 <doppie104@gmail.com>) [SYNCHRONIZED]',
         '[Bootstrap 4/4] Scaling microservice fleet (100 Autonomous Discovery / 50 Yield Optimizers)...',
         '==========================================================',
@@ -213,7 +213,7 @@ echo "[Bootstrap 1/4] Environment Validation: DB Auth OK, Binance Keys: PROVIDER
 echo "[Bootstrap 2/4] Executing 36 PostgreSQL database relation migrations on arbitrage_v13..."
 
 # 4. Binance Gateway & CFO Treasury Init
-echo "[Bootstrap 3/4] Binance Connected: doppie104@gmail.com (UID: 16863338)"
+echo "[Bootstrap 3/4] Binance Connected: doppie104@gmail.com (UID: 1029199926)"
 
 # 5. Microservice Fleet Launch
 echo "[Bootstrap 4/4] Scaling microservice fleet (100 Autonomous Discovery / 50 Yield Optimizers)..."
@@ -312,7 +312,7 @@ echo "=========================================================="`;
                 {[
                   { num: 1, title: 'Environment', desc: 'DB Auth OK · Binance PROVIDER_ACTIVE' },
                   { num: 2, title: 'PostgreSQL 36', desc: '36 relations synchronized' },
-                  { num: 3, title: 'Binance Gateway', desc: 'doppie104 (UID: 16863338)' },
+                  { num: 3, title: 'Binance Gateway', desc: 'doppie104 (UID: 1029199926)' },
                   { num: 4, title: 'Microservice Mesh', desc: '100 Discovery / 50 Optimizers' },
                 ].map((step) => (
                   <div

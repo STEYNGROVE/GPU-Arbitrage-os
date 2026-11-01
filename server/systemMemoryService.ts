@@ -5,12 +5,19 @@ import { fileURLToPath } from 'url';
 import { jakeGroveCfoService } from './jakeGroveCfoService.ts';
 import { trustedIpGuard } from './trustedIpGuard.ts';
 import { githubSyncService } from './githubSyncService.ts';
+import { config } from './config.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_DIR = path.resolve(__dirname, '..', 'data');
-const MEMORY_FILE_PATH = path.join(DATA_DIR, 'system_state_memory.json');
-const BACKUP_FILE_PATH = path.join(DATA_DIR, 'system_state_memory.backup.json');
+function getDataDir(): string {
+  return process.env.APP_DATA_DIR || path.resolve(__dirname, '..', 'data');
+}
+function getMemoryFilePath(): string {
+  return path.join(getDataDir(), 'system_state_memory.json');
+}
+function getBackupFilePath(): string {
+  return path.join(getDataDir(), 'system_state_memory.backup.json');
+}
 
 export interface MemorySnapshot {
   snapshotId: string;
@@ -61,8 +68,9 @@ class SystemMemoryService {
 
   private ensureDataDirectory(): void {
     try {
-      if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
+      const dir = getDataDir();
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
       }
     } catch (err: any) {
       console.warn('[System Memory Service] Could not create data directory:', err.message);
@@ -76,10 +84,11 @@ class SystemMemoryService {
   public async initialize(): Promise<{ rehydratedFromDisk: boolean; bootCount: number; lastSavedAt: string }> {
     this.ensureDataDirectory();
     let rehydratedFromDisk = false;
+    const memFile = getMemoryFilePath();
 
-    if (fs.existsSync(MEMORY_FILE_PATH)) {
+    if (fs.existsSync(memFile)) {
       try {
-        const fileContent = fs.readFileSync(MEMORY_FILE_PATH, 'utf-8');
+        const fileContent = fs.readFileSync(memFile, 'utf-8');
         const parsed = JSON.parse(fileContent);
 
         if (parsed && typeof parsed === 'object') {
@@ -96,11 +105,11 @@ class SystemMemoryService {
 
           // Rehydrate Jake Grove CFO Treasury state from memory
           if (parsed.binanceAccount) {
-            // Guarantee compliance lock for user UID 16863338
-            parsed.binanceAccount.binanceUid = '16863338';
+            // Guarantee compliance lock for user UID
+            parsed.binanceAccount.binanceUid = config.binance.targetUid || parsed.binanceAccount.binanceUid || '1029199926';
             parsed.binanceAccount.ownerEmail = 'doppie104@gmail.com';
             parsed.binanceAccount.verifiedDepositAddress = '0x5d3fe4ac4cdcb3a6065bd4cbb528b7f72cca618d';
-            parsed.binanceAccount.verifiedTronAddress = 'TYP5q9G6N1m8xK7uP4bQ9xV3rE4aZ8wQpL';
+            parsed.binanceAccount.verifiedTronAddress = 'TXGgg8raiaj9fzeVCzD6oamzmUWqnio6KG';
 
             jakeGroveCfoService.hydrateState({
               usdtBalance: parsed.binanceAccount.usdtBalance,
@@ -157,9 +166,10 @@ class SystemMemoryService {
         }
       } catch (err: any) {
         console.error('[System Memory Service] Failed reading persistent state, attempting backup restore:', err.message);
-        if (fs.existsSync(BACKUP_FILE_PATH)) {
+        const backupFile = getBackupFilePath();
+        if (fs.existsSync(backupFile)) {
           try {
-            const backupContent = fs.readFileSync(BACKUP_FILE_PATH, 'utf-8');
+            const backupContent = fs.readFileSync(backupFile, 'utf-8');
             this.currentState = JSON.parse(backupContent);
             rehydratedFromDisk = true;
             console.log('[System Memory 🧠] Restored exact state from secondary backup file.');
@@ -382,15 +392,16 @@ class SystemMemoryService {
 
   public getDiagnostics(): SystemMemoryDiagnostics {
     let fileSize = 0;
+    const memFile = getMemoryFilePath();
     try {
-      if (fs.existsSync(MEMORY_FILE_PATH)) {
-        fileSize = fs.statSync(MEMORY_FILE_PATH).size;
+      if (fs.existsSync(memFile)) {
+        fileSize = fs.statSync(memFile).size;
       }
     } catch {}
 
     const state = this.currentState || {};
     return {
-      memoryStorageFile: MEMORY_FILE_PATH,
+      memoryStorageFile: memFile,
       storageSizeBytes: fileSize,
       lastPersistTimestamp: this.lastPersistTimestamp,
       bootCount: this.bootCount,
@@ -441,16 +452,18 @@ class SystemMemoryService {
         delete (payload as any).bridgeConfig.ownerOverrideKey;
       }
 
+      const memFile = getMemoryFilePath();
+      const backupFile = getBackupFilePath();
       const serialized = JSON.stringify(payload, null, 2);
-      const tempPath = `${MEMORY_FILE_PATH}.tmp`;
+      const tempPath = `${memFile}.tmp`;
 
       // Atomic write pattern: write to temp file then rename
       fs.writeFileSync(tempPath, serialized, 'utf-8');
-      fs.renameSync(tempPath, MEMORY_FILE_PATH);
+      fs.renameSync(tempPath, memFile);
 
       // Also maintain a backup copy
       try {
-        fs.writeFileSync(BACKUP_FILE_PATH, serialized, 'utf-8');
+        fs.writeFileSync(backupFile, serialized, 'utf-8');
       } catch {}
     } catch (err: any) {
       console.error('[System Memory Service] Error persisting state to disk:', err.message);
@@ -469,13 +482,13 @@ class SystemMemoryService {
         isConnected: true,
         ownerEmail: 'doppie104@gmail.com',
         ownerName: 'doppie104 (Jake Grove CFO Master)',
-        binanceUid: '16863338',
+        binanceUid: config.binance.targetUid || '1029199926',
         subaccountName: 'GPU_ARBITRAGE_CAPITAL_MAIN',
         kycStatus: 'Verified Institutional Tier 2',
         whitelistedIp: '34.96.39.119',
         outboundEgressIp: '34.96.39.119',
         verifiedDepositAddress: '0x5d3fe4ac4cdcb3a6065bd4cbb528b7f72cca618d',
-        verifiedTronAddress: 'TYP5q9G6N1m8xK7uP4bQ9xV3rE4aZ8wQpL',
+        verifiedTronAddress: 'TXGgg8raiaj9fzeVCzD6oamzmUWqnio6KG',
         accountType: 'SPOT',
         apiKeyMasked: 'hbLMNj••••••••ixrx',
         apiPermissions: ['SPOT_READ', 'SPOT_TRADE', 'FUTURES_READ', 'FUTURES_HEDGING', 'MARGIN_BORROW', 'INTERNAL_TRANSFER'],
@@ -516,169 +529,9 @@ class SystemMemoryService {
         tokenConfigured: true,
         lastSyncedAt: new Date().toISOString(),
       },
-      activeContracts: [
-        {
-          id: 'CTR-8921-H100',
-          opportunityId: 'opp-1',
-          gpuName: 'NVIDIA H100 SXM5',
-          nodeCount: 8,
-          totalGpus: 64,
-          buyProvider: 'Akash Network (Spot)',
-          buyRegion: 'us-west-2 (Oregon)',
-          buyRate: 1.74,
-          sellCounterparty: 'Anthropic Compute Broker',
-          sellRegion: 'us-east-1 (Virginia)',
-          sellRate: 2.85,
-          netSpreadPerHour: 1.05,
-          totalAccruedPnL: 1411.20,
-          startTime: Date.now() - 168 * 3600 * 1000,
-          durationHours: 336,
-          status: 'ACTIVE_ROUTING',
-          uptimeSla: 99.98,
-          autoRenew: true,
-          preemptionProtection: true,
-          datacenterPUE: 1.12,
-        },
-        {
-          id: 'CTR-9043-B200',
-          opportunityId: 'opp-3',
-          gpuName: 'NVIDIA B200 Blackwell',
-          nodeCount: 4,
-          totalGpus: 32,
-          buyProvider: 'io.net GPU Cloud',
-          buyRegion: 'eu-central-1 (Frankfurt)',
-          buyRate: 3.95,
-          sellCounterparty: 'Mistral AI Fine-Tuning Cluster',
-          sellRegion: 'europe-west1 (Belgium)',
-          sellRate: 5.80,
-          netSpreadPerHour: 1.71,
-          totalAccruedPnL: 820.80,
-          startTime: Date.now() - 120 * 3600 * 1000,
-          durationHours: 168,
-          status: 'ACTIVE_ROUTING',
-          uptimeSla: 99.95,
-          autoRenew: true,
-          preemptionProtection: true,
-          datacenterPUE: 1.08,
-        },
-        {
-          id: 'CTR-9118-H200',
-          opportunityId: 'opp-2',
-          gpuName: 'NVIDIA H200 SXM',
-          nodeCount: 2,
-          totalGpus: 16,
-          buyProvider: 'TensorWave',
-          buyRegion: 'us-central-1 (Iowa)',
-          buyRate: 2.70,
-          sellCounterparty: 'Character.ai Inference Relay',
-          sellRegion: 'us-east-2 (Ohio)',
-          sellRate: 4.10,
-          netSpreadPerHour: 1.28,
-          totalAccruedPnL: 368.64,
-          startTime: Date.now() - 144 * 3600 * 1000,
-          durationHours: 720,
-          status: 'ACTIVE_ROUTING',
-          uptimeSla: 99.99,
-          autoRenew: true,
-          preemptionProtection: true,
-          datacenterPUE: 1.15,
-        },
-        {
-          id: 'CTR-9204-MI300',
-          opportunityId: 'opp-8',
-          gpuName: 'AMD Instinct MI300X',
-          nodeCount: 4,
-          totalGpus: 32,
-          buyProvider: 'RunPod Community Cloud',
-          buyRegion: 'ca-central-1 (Montreal)',
-          buyRate: 1.95,
-          sellCounterparty: 'Cerebras Inference Partner',
-          sellRegion: 'us-west-1 (California)',
-          sellRate: 3.20,
-          netSpreadPerHour: 1.17,
-          totalAccruedPnL: 224.64,
-          startTime: Date.now() - 48 * 3600 * 1000,
-          durationHours: 168,
-          status: 'ACTIVE_ROUTING',
-          uptimeSla: 99.92,
-          autoRenew: false,
-          preemptionProtection: true,
-          datacenterPUE: 1.21,
-        },
-      ],
-      hedgePositions: [
-        {
-          id: 'HDG-AKT-01',
-          pair: 'AKT/USDT',
-          side: 'SHORT',
-          sizeTokens: 12500,
-          sizeUsd: 37500,
-          entryPrice: 3.00,
-          markPrice: 2.82,
-          unrealizedPnl: 2250.00,
-          leverage: 3,
-          hedgeRatio: 0.95,
-          linkedContractId: 'CTR-8921-H100',
-          purpose: 'Akash Network DePIN Preemption Hedge',
-        },
-        {
-          id: 'HDG-IO-02',
-          pair: 'IO/USDT',
-          side: 'SHORT',
-          sizeTokens: 8000,
-          sizeUsd: 14400,
-          entryPrice: 1.80,
-          markPrice: 1.68,
-          unrealizedPnl: 960.00,
-          leverage: 2,
-          hedgeRatio: 0.90,
-          linkedContractId: 'CTR-9043-B200',
-          purpose: 'io.net Slashing & Volatility Hedge',
-        },
-        {
-          id: 'HDG-RNDR-03',
-          pair: 'RENDER/USDT',
-          side: 'SHORT',
-          sizeTokens: 4500,
-          sizeUsd: 22500,
-          entryPrice: 5.00,
-          markPrice: 4.85,
-          unrealizedPnl: 675.00,
-          leverage: 3,
-          hedgeRatio: 0.85,
-          linkedContractId: 'CTR-9118-H200',
-          purpose: 'Render Network Latency Delta Hedge',
-        },
-      ],
-      transfers: [
-        {
-          id: 'TRF-001',
-          timestamp: new Date(Date.now() - 1000 * 3600 * 2).toISOString(),
-          type: 'PROFIT_SWEEP',
-          asset: 'USDT',
-          amount: 4850.00,
-          txHash: '0x94f83b1029e84ad27c992d3f019a8264e9a038bf',
-          status: 'CONFIRMED',
-        },
-        {
-          id: 'TRF-002',
-          timestamp: new Date(Date.now() - 1000 * 3600 * 8).toISOString(),
-          type: 'MARGIN_COLLATERAL',
-          asset: 'USDC',
-          amount: 25000.00,
-          txHash: '0x22c4f87a912bb037190ca881726a45ef72b4c102',
-          status: 'CONFIRMED',
-        },
-        {
-          id: 'TRF-003',
-          timestamp: new Date(Date.now() - 1000 * 3600 * 24).toISOString(),
-          type: 'ESCROW_SETTLEMENT',
-          asset: 'USDT',
-          amount: 18400.00,
-          txHash: '0xaa71349cd01f82b7405c742d13b4e60184b238aa',
-          status: 'CONFIRMED',
-        },
-      ],
+      activeContracts: [],
+      hedgePositions: [],
+      transfers: [],
       logs: [
         {
           id: 'log-boot-01',

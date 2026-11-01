@@ -17,6 +17,7 @@ interface TopBarProps {
   onOpenGroqAi?: () => void;
   discoveryWorkersCount: number;
   optimizerWorkersCount: number;
+  binanceUid?: string;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -35,6 +36,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenGroqAi,
   discoveryWorkersCount,
   optimizerWorkersCount,
+  binanceUid,
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-[#090d16]/95 backdrop-blur-md border-b border-slate-800/80 px-6 py-3.5">
@@ -79,7 +81,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             <ShieldCheck className="w-3.5 h-3.5" />
             <span>Active Contracts ({activeContractsCount})</span>
             <span className="font-mono text-[10px] text-emerald-400 tabular-nums">
-              +${totalAccruedPnL.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+              +${totalAccruedPnL >= 100 ? totalAccruedPnL.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) : totalAccruedPnL.toFixed(2)}
             </span>
           </button>
 
@@ -95,7 +97,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             <span>Binance Treasury</span>
             {isBinanceConnected && (
               <span className="font-mono text-[10px] text-amber-400 bg-amber-950/60 px-1.5 py-0.2 rounded border border-amber-800/60 tabular-nums">
-                ${(binanceUsdtBalance / 1000).toFixed(1)}k USDT
+                {binanceUsdtBalance >= 1000 ? `$${(binanceUsdtBalance / 1000).toFixed(1)}k USDT` : `$${binanceUsdtBalance.toFixed(2)} USDT`}
               </span>
             )}
           </button>
@@ -142,11 +144,11 @@ export const TopBar: React.FC<TopBarProps> = ({
           <button
             onClick={() => setActiveTab('binance')}
             className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono font-bold text-emerald-300 bg-emerald-950/80 border border-emerald-600/70 rounded-md cursor-pointer hover:bg-emerald-900 transition-colors shadow-sm"
-            title="Appointed Capital Guardian Agent: UID 16863338 Protected · Balanced to the Cent ($0.00 Variance)"
+            title={`Appointed Capital Guardian Agent: UID ${binanceUid || '1029199926'} Protected · Balanced to the Cent ($0.00 Variance)`}
           >
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="hidden xl:inline">UID: 16863338 (Protected)</span>
-            <span className="xl:hidden">16863338</span>
+            <span className="hidden xl:inline">UID: {binanceUid || '1029199926'} (Protected)</span>
+            <span className="xl:hidden">{binanceUid || '1029199926'}</span>
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
           </button>
 

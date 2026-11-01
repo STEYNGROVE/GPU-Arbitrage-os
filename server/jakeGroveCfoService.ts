@@ -363,11 +363,11 @@ class JakeGroveCfoService {
     subaccount: string;
     networks: WithdrawalNetworkConfig[];
   } {
-    const pulled = binanceCapitalGuardianAgent.getStatus().pulledAddresses;
-    const bscAddr = pulled.find(p => p.network === 'BSC')?.address || config.binance.primaryEvmAddress;
-    const ethAddr = pulled.find(p => p.network === 'ERC20' || p.network === 'ETH')?.address || config.binance.primaryEvmAddress;
-    const arbAddr = pulled.find(p => p.network === 'ARBITRUM')?.address || config.binance.primaryEvmAddress;
-    const trxAddr = pulled.find(p => p.network === 'TRC20' || p.network === 'TRX')?.address || config.binance.tronAddress;
+    const pulled = binanceCapitalGuardianAgent.getStatus().pulledAddresses || [];
+    const bscAddr = (pulled as any[]).find((p: any) => p.network === 'BSC')?.address || config.binance.primaryEvmAddress;
+    const ethAddr = (pulled as any[]).find((p: any) => p.network === 'ERC20' || p.network === 'ETH')?.address || config.binance.primaryEvmAddress;
+    const arbAddr = (pulled as any[]).find((p: any) => p.network === 'ARBITRUM')?.address || config.binance.primaryEvmAddress;
+    const trxAddr = (pulled as any[]).find((p: any) => p.network === 'TRC20' || p.network === 'TRX')?.address || config.binance.tronAddress;
 
     return {
       ownerEmail: 'doppie104@gmail.com',

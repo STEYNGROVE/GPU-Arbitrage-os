@@ -17,8 +17,12 @@ import {
   Zap,
   Terminal,
   Activity,
-  Server
+  Server,
+  Clipboard,
+  ClipboardPaste,
+  KeyRound,
 } from 'lucide-react';
+import { getAuthToken, setAuthToken } from '../apiSession';
 
 interface BridgeParameters {
   bridgeUrl: string;
@@ -70,11 +74,68 @@ export const PlatformSettingsModal: React.FC<PlatformSettingsModalProps> = ({
   const [testResult, setTestResult] = useState<TestBridgeResult | null>(null);
   const [actionMsg, setActionMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [liveStreamEvents, setLiveStreamEvents] = useState<Array<{ timestamp: string; event: string; details: string }>>([]);
+  const [pasteNotice, setPasteNotice] = useState<string | null>(null);
+  const [showManualPaste, setShowManualPaste] = useState<boolean>(false);
+  const [manualPasteInput, setManualPasteInput] = useState<string>('');
 
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
     setCopiedKey(label);
     setTimeout(() => setCopiedKey(null), 2500);
+  };
+
+  const handlePasteOwnerOverrideKey = async () => {
+    setPasteNotice(null);
+    // 1. Try reading directly from clipboard
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.readText) {
+        const text = await navigator.clipboard.readText();
+        if (text && text.trim()) {
+          const clean = text.trim();
+          setBridgeToken(clean);
+          setPasteNotice(`Successfully pasted key (${clean.length} chars) from clipboard.`);
+          setTimeout(() => setPasteNotice(null), 4000);
+          return;
+        }
+      }
+    } catch (err: any) {
+      console.warn('Clipboard readText failed or restricted by browser iframe sandbox:', err);
+    }
+
+    // 2. Check if the active session token exists
+    const activeToken = getAuthToken();
+    if (activeToken && activeToken.length >= 32) {
+      setBridgeToken(activeToken);
+      setPasteNotice(`Populated with active session key (${activeToken.length} chars).`);
+      setTimeout(() => setPasteNotice(null), 4000);
+      return;
+    }
+
+    // 3. Fallback: reveal manual paste input
+    setShowManualPaste(true);
+    setPasteNotice('Browser restricted clipboard reading in iframe. Paste manually into the box below or press Ctrl+V.');
+  };
+
+  const handleMatchOwnerKey = () => {
+    const activeToken = getAuthToken();
+    if (activeToken && activeToken.length >= 32) {
+      setBridgeToken(activeToken);
+      setPasteNotice(`Matched OWNER_OVERRIDE_KEY to active authorization token.`);
+      setTimeout(() => setPasteNotice(null), 3500);
+    } else {
+      handlePasteOwnerOverrideKey();
+    }
+  };
+
+  const applyManualPastedKey = () => {
+    if (manualPasteInput && manualPasteInput.trim()) {
+      const clean = manualPasteInput.trim();
+      setBridgeToken(clean);
+      setManualPasteInput('');
+      setShowManualPaste(false);
+      setPasteNotice(`Applied manual key input (${clean.length} chars).`);
+      setTimeout(() => setPasteNotice(null), 3500);
+    }
   };
 
   const loadSettings = () => {
@@ -136,24 +197,33 @@ export const PlatformSettingsModal: React.FC<PlatformSettingsModalProps> = ({
   const handleSave = () => {
     setIsSaving(true);
     setActionMsg(null);
+    const tokenToSend = bridgeToken.trim() || getAuthToken();
     fetch('/api/settings/bridge', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${tokenToSend}`,
+        'x-owner-key': tokenToSend,
+        'x-owner-override-key': tokenToSend,
+      },
       body: JSON.stringify({
         bridgeUrl,
-        bridgeToken,
-        ownerOverrideKey: bridgeToken,
+        bridgeToken: bridgeToken.trim(),
+        ownerOverrideKey: bridgeToken.trim(),
       }),
     })
       .then((res) => res.json())
       .then((res) => {
         setIsSaving(false);
         if (res.success) {
+          if (bridgeToken.trim().length >= 32) {
+            setAuthToken(bridgeToken.trim());
+          }
           setActionMsg({
             type: 'success',
             text: 'Production Bridge Parameter Mappings locked and synchronized with Nginx Edge Proxy.',
           });
-          runBridgeTest(bridgeUrl, bridgeToken);
+          runBridgeTest(bridgeUrl, bridgeToken.trim());
           if (onSettingsSaved) onSettingsSaved();
         } else {
           setActionMsg({ type: 'error', text: res.error || 'Failed to update bridge parameters.' });
@@ -349,14 +419,27 @@ export const PlatformSettingsModal: React.FC<PlatformSettingsModalProps> = ({
                     = OWNER_OVERRIDE_KEY
                   </span>
                 </div>
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-1.5 flex-wrap">
                   <button
-                    onClick={() => setBridgeToken('')}
-                    className="px-2 py-1 text-[11px] font-medium text-slate-400 hover:text-amber-300 bg-slate-800 hover:bg-slate-750 rounded transition-colors"
+                    type="button"
+                    onClick={handlePasteOwnerOverrideKey}
+                    className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-amber-300 bg-amber-950/80 hover:bg-amber-900 border border-amber-600/70 rounded shadow-sm transition-colors cursor-pointer"
+                    title="Paste OWNER_OVERRIDE_KEY from clipboard"
                   >
-                    Match OWNER_OVERRIDE_KEY
+                    <ClipboardPaste className="w-3.5 h-3.5" />
+                    <span>Paste Key</span>
                   </button>
                   <button
+                    type="button"
+                    onClick={handleMatchOwnerKey}
+                    className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-300 hover:text-emerald-300 bg-slate-800 hover:bg-slate-750 border border-slate-700 rounded transition-colors cursor-pointer"
+                    title="Match token from active authorized session or override key"
+                  >
+                    <KeyRound className="w-3 h-3 text-emerald-400" />
+                    <span>Match Session Key</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setShowToken(!showToken)}
                     className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800"
                     title={showToken ? 'Mask Token' : 'Reveal Token'}
@@ -364,6 +447,7 @@ export const PlatformSettingsModal: React.FC<PlatformSettingsModalProps> = ({
                     {showToken ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                   </button>
                   <button
+                    type="button"
                     onClick={() => copyToClipboard(bridgeToken, 'token')}
                     className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800"
                     title="Copy Token"
@@ -378,10 +462,61 @@ export const PlatformSettingsModal: React.FC<PlatformSettingsModalProps> = ({
                   type={showToken ? 'text' : 'password'}
                   value={bridgeToken}
                   onChange={(e) => setBridgeToken(e.target.value)}
+                  onPaste={(e) => {
+                    const pasted = e.clipboardData.getData('text');
+                    if (pasted) {
+                      const clean = pasted.trim();
+                      setBridgeToken(clean);
+                      setPasteNotice(`Directly pasted ${clean.length} characters`);
+                      setTimeout(() => setPasteNotice(null), 3500);
+                    }
+                  }}
                   className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 focus:border-amber-500 rounded-lg text-sm font-mono text-amber-300 outline-none"
-                  placeholder=""
+                  placeholder="Paste or enter 32+ character OWNER_OVERRIDE_KEY..."
                 />
               </div>
+
+              {/* Paste Notice Notification Banner */}
+              {pasteNotice && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-950/60 border border-amber-600/60 text-amber-300 text-xs font-mono animate-fadeIn">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span>{pasteNotice}</span>
+                </div>
+              )}
+
+              {/* Manual Paste Drawer (Fallback when iframe blocks clipboard.readText) */}
+              {showManualPaste && (
+                <div className="p-3 bg-slate-950 border border-amber-500/40 rounded-lg space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-amber-300">
+                      Iframe Clipboard Fallback: Paste Key Directly Below
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowManualPaste(false)}
+                      className="text-slate-400 hover:text-white text-xs"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                  <textarea
+                    rows={2}
+                    value={manualPasteInput}
+                    onChange={(e) => setManualPasteInput(e.target.value)}
+                    placeholder="Press Ctrl+V / Cmd+V here to paste your owner override key..."
+                    className="w-full p-2 bg-slate-900 border border-slate-700 rounded text-xs font-mono text-amber-200 outline-none focus:border-amber-400"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={applyManualPastedKey}
+                      className="px-3 py-1 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs rounded transition-colors"
+                    >
+                      Apply Pasted Key
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1 text-xs">
                 <div className="p-2.5 bg-slate-950/60 border border-slate-800/80 rounded-lg text-slate-400">

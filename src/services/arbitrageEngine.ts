@@ -400,143 +400,29 @@ export const INITIAL_ARBITRAGE_OPPORTUNITIES: ArbitrageOpportunity[] = [
   },
 ];
 
-export function computeContractAccruedPnL(contract: {
-  startTime: number;
-  durationHours: number;
-  netSpreadPerHour: number;
-  nodeCount: number;
-  status: string;
+export function computeContractAccruedPnL(contract?: {
+  startTime?: number;
+  durationHours?: number;
+  netSpreadPerHour?: number;
+  nodeCount?: number;
+  status?: string;
   totalAccruedPnL?: number;
 }, now: number = Date.now()): number {
-  if (contract.status === 'PAUSED') {
+  if (!contract) return 0;
+  if (contract.status !== 'ACTIVE_ROUTING') {
     return Number((contract.totalAccruedPnL || 0).toFixed(2));
   }
-  const elapsedMillis = Math.max(0, now - Number(contract.startTime || now));
-  const elapsedHours = elapsedMillis / (1000 * 3600);
-  const effectiveHours = contract.durationHours > 0 ? Math.min(elapsedHours, contract.durationHours) : elapsedHours;
-  const accrued = effectiveHours * Number(contract.netSpreadPerHour || 0) * Number(contract.nodeCount || 1);
-  return Number(Math.max(Number(contract.totalAccruedPnL) || 0, accrued).toFixed(2));
+  const startTime = contract.startTime || now;
+  const elapsedHours = Math.max(0, (now - startTime) / (3600 * 1000));
+  const cappedElapsed = contract.durationHours ? Math.min(elapsedHours, contract.durationHours) : elapsedHours;
+  const spreadPerHour = contract.netSpreadPerHour || 0;
+  const nodes = contract.nodeCount || 1;
+  const calculated = cappedElapsed * spreadPerHour * nodes;
+  return Number(Math.max(contract.totalAccruedPnL || 0, calculated).toFixed(2));
 }
 
-const c1Start = Date.now() - 48 * 3600 * 1000;
-const c2Start = Date.now() - 72 * 3600 * 1000;
-const c3Start = Date.now() - 24 * 3600 * 1000;
-const c4Start = Date.now() - 18 * 3600 * 1000;
+export const INITIAL_ACTIVE_CONTRACTS: ActiveContract[] = [];
 
-export const INITIAL_ACTIVE_CONTRACTS: ActiveContract[] = [
-  {
-    id: 'CTR-8812-H100',
-    opportunityId: 'arb-h100-01',
-    gpuName: 'NVIDIA H100 SXM5 80GB',
-    nodeCount: 8,
-    totalGpus: 64,
-    buyProvider: 'Vast.ai Spot Fabric',
-    buyRegion: 'EU-North (Oslo)',
-    buyRate: 1.48,
-    sellCounterparty: 'CoreWeave Dedicated SLA Buyer',
-    sellRegion: 'US-East (Virginia)',
-    sellRate: 2.85,
-    netSpreadPerHour: 1.25,
-    totalAccruedPnL: computeContractAccruedPnL({
-      startTime: c1Start,
-      durationHours: 168,
-      netSpreadPerHour: 1.25,
-      nodeCount: 8,
-      status: 'ACTIVE_ROUTING',
-    }),
-    startTime: c1Start,
-    durationHours: 168, // 7 days
-    status: 'ACTIVE_ROUTING',
-    uptimeSla: 99.98,
-    autoRenew: true,
-    preemptionProtection: true,
-    datacenterPUE: 1.15,
-  },
-  {
-    id: 'CTR-9204-B200',
-    opportunityId: 'arb-b200-02',
-    gpuName: 'NVIDIA B200 Blackwell 192GB',
-    nodeCount: 4,
-    totalGpus: 32,
-    buyProvider: 'Crusoe Clean Compute',
-    buyRegion: 'US-North Dakota (Flare)',
-    buyRate: 3.20,
-    sellCounterparty: 'Foundation Model Pretraining Collective',
-    sellRegion: 'US-West Enterprise Hub',
-    sellRate: 5.40,
-    netSpreadPerHour: 2.02,
-    totalAccruedPnL: computeContractAccruedPnL({
-      startTime: c2Start,
-      durationHours: 720,
-      netSpreadPerHour: 2.02,
-      nodeCount: 4,
-      status: 'ACTIVE_ROUTING',
-    }),
-    startTime: c2Start,
-    durationHours: 720, // 30 days
-    status: 'ACTIVE_ROUTING',
-    uptimeSla: 99.99,
-    autoRenew: true,
-    preemptionProtection: true,
-    datacenterPUE: 1.05,
-  },
-  {
-    id: 'CTR-7411-H200',
-    opportunityId: 'arb-h200-03',
-    gpuName: 'NVIDIA H200 SXM 141GB',
-    nodeCount: 4,
-    totalGpus: 32,
-    buyProvider: 'FluidStack Global Mesh',
-    buyRegion: 'Reykjavik Iceland (Geothermal)',
-    buyRate: 2.10,
-    sellCounterparty: 'European Autonomous Driving Cluster',
-    sellRegion: 'Frankfurt de-central-1',
-    sellRate: 3.90,
-    netSpreadPerHour: 1.65,
-    totalAccruedPnL: computeContractAccruedPnL({
-      startTime: c3Start,
-      durationHours: 168,
-      netSpreadPerHour: 1.65,
-      nodeCount: 4,
-      status: 'ACTIVE_ROUTING',
-    }),
-    startTime: c3Start,
-    durationHours: 168,
-    status: 'ACTIVE_ROUTING',
-    uptimeSla: 99.95,
-    autoRenew: false,
-    preemptionProtection: true,
-    datacenterPUE: 1.06,
-  },
-  {
-    id: 'CTR-6033-A100',
-    opportunityId: 'arb-a100-04',
-    gpuName: 'NVIDIA A100 80GB SXM4',
-    nodeCount: 16,
-    totalGpus: 128,
-    buyProvider: 'Prime Intellect Decentralized',
-    buyRegion: 'US-Midwest Node #89',
-    buyRate: 0.98,
-    sellCounterparty: 'Quant FinTech Micro-Inference Pool',
-    sellRegion: 'Chicago CME Direct Connect',
-    sellRate: 1.95,
-    netSpreadPerHour: 0.89,
-    totalAccruedPnL: computeContractAccruedPnL({
-      startTime: c4Start,
-      durationHours: 72,
-      netSpreadPerHour: 0.89,
-      nodeCount: 16,
-      status: 'ACTIVE_ROUTING',
-    }),
-    startTime: c4Start,
-    durationHours: 72,
-    status: 'ACTIVE_ROUTING',
-    uptimeSla: 99.88,
-    autoRenew: true,
-    preemptionProtection: false,
-    datacenterPUE: 1.20,
-  },
-];
 
 // The 36 PostgreSQL database relations from PostgreSQL 'arbitrage_v13' catalog
 export const POSTGRES_36_RELATIONS: DatabaseRelation[] = [
@@ -583,65 +469,7 @@ export const POSTGRES_36_RELATIONS: DatabaseRelation[] = [
 ];
 
 export function generateInitialFleetWorkers(): FleetWorker[] {
-  const workers: FleetWorker[] = [];
-
-  // 100 Autonomous Discovery Fleet agents
-  const discoveryTargets = [
-    'Vast.ai API Gateway',
-    'RunPod GraphQL Endpoint',
-    'Lambda Labs REST Scraper',
-    'CoreWeave Cloud API',
-    'Crusoe Cloud GraphQL',
-    'FluidStack Mesh Prober',
-    'Prime Intellect P2P Node Indexer',
-    'Nebius AI REST v2',
-    'AWS EC2 Spot Price Feed (us-east-1)',
-    'GCP Spot Instance Feed (us-central1)',
-  ];
-
-  for (let i = 1; i <= 100; i++) {
-    const target = discoveryTargets[(i - 1) % discoveryTargets.length];
-    workers.push({
-      id: `discovery-agent-${String(i).padStart(3, '0')}`,
-      workerNumber: i,
-      fleetType: 'autonomous_discovery_fleet',
-      target,
-      currentTask: `Crawling spot availability & pinging nodes on ${target}`,
-      status: i % 15 === 0 ? 'PROCESSING' : 'ACTIVE',
-      nodesScannedPerSec: 65 + ((i * 17) % 60),
-      latencyMs: 14 + ((i * 3) % 18),
-      memoryMb: 72 + ((i * 5) % 24),
-      lastHeartbeat: 'Now',
-    });
-  }
-
-  // 50 Yield Optimizer Fleet engines
-  const optimizerTasks = [
-    'Bellman-Ford Cross-Provider Routing Matrix',
-    'Monte Carlo Preemption Risk Surface Simulation',
-    'Black-Scholes Spot Compute Derivative Pricing',
-    'Latency SLA Penalty & Hedging Buffer Evaluation',
-    'PUE-Weighted Energy Cost Arbitrage Normalizer',
-    'Dynamic Orderbook Depth & Liquidity Aggregator',
-  ];
-
-  for (let i = 1; i <= 50; i++) {
-    const task = optimizerTasks[(i - 1) % optimizerTasks.length];
-    workers.push({
-      id: `yield-optimizer-${String(i).padStart(3, '0')}`,
-      workerNumber: i,
-      fleetType: 'yield_optimizer_fleet',
-      target: 'Real-time Matrix Solver',
-      currentTask: task,
-      status: i % 8 === 0 ? 'PROCESSING' : 'ACTIVE',
-      nodesScannedPerSec: 2200 + ((i * 47) % 800),
-      latencyMs: 3 + ((i * 2) % 5),
-      memoryMb: 160 + ((i * 7) % 64),
-      lastHeartbeat: 'Now',
-    });
-  }
-
-  return workers;
+  return [];
 }
 
 export function generateInitialLogs(): ExecutionLog[] {
@@ -713,13 +541,13 @@ export const INITIAL_BINANCE_ACCOUNT: import('../types/arbitrage').BinanceAccoun
   ownerEmail: 'doppie104@gmail.com',
   ownerName: 'doppie104 (Master Account Owner)',
   binanceUid: '16863338',
-  subaccountName: 'arbitrage-fleet-v13-prod',
-  kycStatus: 'Verified (Corporate Tier 3 - Institutional)',
+  subaccountName: 'GPU_ARBITRAGE_CAPITAL_MAIN',
+  kycStatus: 'Verified (Institutional Tier 2)',
   whitelistedIp: '34.96.39.119, 35.242.198.112',
   outboundEgressIp: '34.96.39.119',
   recommendedWhitelistIps: ['34.96.39.119', '35.242.198.112'],
-  accountType: 'VIP 3 Institutional',
-  apiKeyMasked: 'bin_v13_9948••••••••e83b',
+  accountType: 'SPOT',
+  apiKeyMasked: 'hbLMNj••••••••ixrx',
   apiPermissions: [
     'Spot Trading',
     'Cross-Margin Borrow (4.2% APR)',
@@ -727,12 +555,15 @@ export const INITIAL_BINANCE_ACCOUNT: import('../types/arbitrage').BinanceAccoun
     'Internal Subaccount Transfer',
     'Fast Settlement Webhooks'
   ],
-  pingLatencyMs: 8.4,
-  usdtBalance: 7.01,
+  pingLatencyMs: 249,
+  usdtBalance: 3.02,
+  rawSpotBalance: 3.02,
+  sweptProfitsUsd: 0.00,
   usdcBalance: 0.00,
   btcBalance: 0.000,
-  ethBalance: 0.00,
-  totalEquityUsd: 7.01,
+  ethBalance: 0.0042,
+  bnbBalance: 0.0007,
+  totalEquityUsd: 14.15,
   availableMarginUsd: 0.00,
   autoSweepProfits: false,
   sweepThresholdUsd: 250.00,
@@ -740,7 +571,7 @@ export const INITIAL_BINANCE_ACCOUNT: import('../types/arbitrage').BinanceAccoun
   makerFeeRate: 0.0002,
   takerFeeRate: 0.0004,
   verifiedDepositAddress: '0x5d3fe4ac4cdcb3a6065bd4cbb528b7f72cca618d',
-  verifiedTronAddress: 'TYP5q9G6N1m8xK7uP4bQ9xV3rE4aZ8wQpL',
+  verifiedTronAddress: 'TXGgg8raiaj9fzeVCzD6oamzmUWqnio6KG',
 };
 
 export const DEPIN_TOKENS_LIST: import('../types/arbitrage').DePINToken[] = [
@@ -806,72 +637,6 @@ export const DEPIN_TOKENS_LIST: import('../types/arbitrage').DePINToken[] = [
   },
 ];
 
-export const INITIAL_BINANCE_HEDGES: import('../types/arbitrage').BinanceHedgePosition[] = [
-  {
-    id: 'HDG-01-RENDER',
-    pair: 'RENDERUSDT',
-    side: 'SHORT',
-    sizeTokens: 4500,
-    sizeUsd: 30780.00,
-    entryPrice: 6.88,
-    markPrice: 6.84,
-    unrealizedPnl: 180.00,
-    leverage: 3,
-    hedgeRatio: 1.0,
-    linkedContractId: 'CTR-8812-H100',
-    purpose: 'Delta-neutral lock on inbound DePIN token compute subsidy',
-  },
-  {
-    id: 'HDG-02-TAO',
-    pair: 'TAOUSDT',
-    side: 'SHORT',
-    sizeTokens: 40,
-    sizeUsd: 23368.00,
-    entryPrice: 588.50,
-    markPrice: 584.20,
-    unrealizedPnl: 172.00,
-    leverage: 2,
-    hedgeRatio: 0.95,
-    linkedContractId: 'CTR-9204-B200',
-    purpose: 'Bittensor incentive yield conversion hedge to USDT',
-  },
-];
+export const INITIAL_BINANCE_HEDGES: import('../types/arbitrage').BinanceHedgePosition[] = [];
 
-export const INITIAL_BINANCE_TRANSFERS: import('../types/arbitrage').BinanceTransfer[] = [
-  {
-    id: 'TRF-9941',
-    timestamp: '08:44:10',
-    type: 'PROFIT_SWEEP',
-    asset: 'USDT',
-    amount: 1420.50,
-    txHash: '0x8f2c...49a1',
-    status: 'CONFIRMED',
-  },
-  {
-    id: 'TRF-9882',
-    timestamp: '07:30:00',
-    type: 'PROFIT_SWEEP',
-    asset: 'USDT',
-    amount: 2840.00,
-    txHash: '0x3d7b...91c0',
-    status: 'CONFIRMED',
-  },
-  {
-    id: 'TRF-9740',
-    timestamp: '05:15:22',
-    type: 'MARGIN_COLLATERAL',
-    asset: 'USDC',
-    amount: 25000.00,
-    txHash: '0x1e4a...66e2',
-    status: 'CONFIRMED',
-  },
-  {
-    id: 'TRF-9610',
-    timestamp: '02:00:00',
-    type: 'HEDGE_PAYOUT',
-    asset: 'USDT',
-    amount: 680.25,
-    txHash: '0x99a4...bb3f',
-    status: 'CONFIRMED',
-  },
-];
+export const INITIAL_BINANCE_TRANSFERS: import('../types/arbitrage').BinanceTransfer[] = [];

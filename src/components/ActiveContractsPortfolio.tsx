@@ -128,17 +128,25 @@ export const ActiveContractsPortfolio: React.FC<ActiveContractsPortfolioProps> =
       {/* Contracts List */}
       <div className="space-y-4">
         {contracts.length === 0 ? (
-          <div className="p-12 text-center bg-slate-900/60 border border-slate-800 rounded-lg">
-            <p className="text-sm font-medium text-slate-300">No active arbitrage contracts currently running.</p>
-            <p className="text-xs text-slate-500 mt-1">
-              Select an opportunity from the Market Spreads tab to execute an arbitrage lease.
-            </p>
-            <button
-              onClick={onOpenQuickDeploy}
-              className="mt-4 px-4 py-2 text-xs font-semibold text-slate-950 bg-cyan-400 hover:bg-cyan-300 rounded transition-colors cursor-pointer"
-            >
-              Deploy Arbitrage Position
-            </button>
+          <div className="p-8 text-center bg-slate-900/60 border border-slate-800 rounded-xl space-y-4">
+            <div className="w-12 h-12 mx-auto rounded-full bg-cyan-950/80 border border-cyan-500/40 flex items-center justify-center text-cyan-400">
+              <Zap className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-base font-bold text-slate-100">0 Active Arbitrage Contracts Running</p>
+              <p className="text-xs text-slate-400 mt-1 max-w-lg mx-auto">
+                Accrued PnL is currently <span className="text-emerald-400 font-mono font-bold">$0.00</span> because no compute arbitrage leases are actively executing. In compliance with strict GAAP accounting, profits only accrue in physical time when a verified lease position is deployed.
+              </p>
+            </div>
+            <div className="flex items-center justify-center gap-3 pt-2">
+              <button
+                onClick={onOpenQuickDeploy}
+                className="px-5 py-2.5 text-xs font-bold text-slate-950 bg-gradient-to-r from-cyan-400 to-teal-300 hover:from-cyan-300 hover:to-teal-200 rounded-lg shadow-md shadow-cyan-950/40 transition-all cursor-pointer flex items-center gap-2 transform active:scale-95"
+              >
+                <Zap className="w-4 h-4 fill-current" />
+                <span>Deploy Top Spread (H100 SXM5 · Vast.ai -&gt; CoreWeave)</span>
+              </button>
+            </div>
           </div>
         ) : (
           contracts.map((contract) => {

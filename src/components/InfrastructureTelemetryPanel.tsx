@@ -150,7 +150,7 @@ export const InfrastructureTelemetryPanel: React.FC<InfrastructureTelemetryPanel
               ${(telemetry?.masterPortfolio.usdtMasterSpotBalance ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{' '}
               <span className="text-xs text-slate-400 font-normal">USDT</span>
             </span>
-            <span className="text-[9px] text-emerald-500/80 block mt-0.5">Binance Spot Account (UID 16863338)</span>
+            <span className="text-[9px] text-emerald-500/80 block mt-0.5">Binance Spot Account (UID 1029199926)</span>
           </div>
 
           <div className="p-2.5 bg-slate-950/70 border border-slate-800/80 rounded-lg">

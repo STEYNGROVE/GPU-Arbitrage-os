@@ -16,7 +16,21 @@ import { config } from './server/config.ts';
 import { groqAiService } from './server/groqAiService.ts';
 import { binanceCapitalGuardianAgent, PROTECTED_MASTER_UID } from './server/binanceCapitalReconciliationAgent.ts';
 import { paymentsService } from './server/paymentsService.ts';
-import { providerVerificationService } from './server/providerVerificationService.ts';
+import cookieParser from 'cookie-parser';
+import { sessionService } from './server/sessionService.ts';
+import {
+  requireAuth,
+  requireOwnerAuth,
+  extractAuthToken,
+  extractSessionId,
+  resolveAuth,
+  isAuthorizedPassToken,
+  cryptoSafeEqual,
+  rateLimiter,
+} from './server/authMiddleware.ts';
+import { redact } from './server/redact.ts';
+import { verifiedOpportunityEngine } from './server/verifiedOpportunityEngine.ts';
+import { providerVerificationService, type ProviderVerificationStatus } from './server/providerVerificationService.ts';
 
 dotenv.config();
 
@@ -34,6 +48,7 @@ async function startServer() {
   const PORT = cliPort || (process.env.PORT ? Number(process.env.PORT) : 3000);
 
   app.use(express.json());
+  app.use(cookieParser());
 
   // Enforce Trusted IP Access Restriction Middleware
   app.use(trustedIpGuard.middleware());
@@ -42,6 +57,134 @@ async function startServer() {
   let bootstrapReport = await bootstrapSystem();
 
   // API Routes
+  // 0. Session Authentication & Ephemeral Session Tokens
+  app.get('/api/session', (req: Request, res: Response) => {
+    const auth = resolveAuth(req);
+    if (!auth.authenticated) {
+      return res.status(401).json({
+        error: 'Access key was rejected. Use a configured server API or owner key.',
+        authenticated: false,
+      });
+    }
+    return res.json({
+      authenticated: true,
+      role: auth.role,
+      isOwner: auth.isOwner,
+      csrfToken: auth.session?.csrfToken,
+    });
+  });
+
+  app.post('/api/session', (req: Request, res: Response) => {
+    const auth = resolveAuth(req);
+    if (auth.authenticated) {
+      return res.json({
+        authenticated: true,
+        role: auth.role,
+        isOwner: auth.isOwner,
+        csrfToken: auth.session?.csrfToken,
+      });
+    }
+
+    const token = extractAuthToken(req) || req.body?.key;
+    if (!token || !isAuthorizedPassToken(token)) {
+      return res.status(401).json({
+        error: 'Access key was rejected. Use a configured server API or owner key.',
+        authenticated: false,
+      });
+    }
+    const ownerTokens = [config.ownerApiKey, config.ownerOverrideKey].filter((v) => v && v.length >= 32);
+    const isOwner = ownerTokens.some((v) => cryptoSafeEqual(token, v));
+    return res.json({
+      authenticated: true,
+      role: isOwner ? 'owner' : 'operator',
+      isOwner,
+    });
+  });
+
+  // Secure login route: verifies credentials, enforces rate limiting, issues HttpOnly cookie
+  app.post('/api/auth/login', rateLimiter(10, 60000), (req: Request, res: Response) => {
+    const { key } = req.body || {};
+    const clientIp = trustedIpGuard.getClientIp(req);
+    const userAgent = (req.headers['user-agent'] as string) || '';
+
+    const result = sessionService.loginWithKey(key, clientIp, userAgent);
+    if (!result.success || !result.session) {
+      return res.status(result.status).json({
+        success: false,
+        error: result.error || 'Authentication failed',
+      });
+    }
+
+    const isProd = process.env.NODE_ENV === 'production';
+    res.cookie('gpu_session', result.session.sessionId, {
+      httpOnly: true,
+      secure: isProd && req.secure,
+      sameSite: 'strict',
+      maxAge: 8 * 60 * 60 * 1000,
+      path: '/',
+    });
+
+    return res.json({
+      success: true,
+      role: result.session.role,
+      isOwner: result.session.role === 'owner',
+      csrfToken: result.session.csrfToken,
+      expiresAt: result.session.expiresAt,
+    });
+  });
+
+  // Logout route: revokes current session and clears cookie
+  app.post('/api/auth/logout', (req: Request, res: Response) => {
+    const sessionId = extractSessionId(req);
+    const clientIp = trustedIpGuard.getClientIp(req);
+    if (sessionId) {
+      sessionService.revokeSession(sessionId, clientIp);
+    }
+    res.clearCookie('gpu_session', { path: '/' });
+    res.clearCookie('__Host-gpu_session', { path: '/' });
+    return res.json({ success: true, message: 'Logged out successfully' });
+  });
+
+  // Revoke all sessions: owner only
+  app.post('/api/auth/revoke-all', requireAuth, requireOwnerAuth, (req: Request, res: Response) => {
+    const clientIp = trustedIpGuard.getClientIp(req);
+    const revoked = sessionService.revokeAllSessions(clientIp);
+    res.clearCookie('gpu_session', { path: '/' });
+    res.clearCookie('__Host-gpu_session', { path: '/' });
+    return res.json({ success: true, revokedSessions: revoked });
+  });
+
+  // Secured session info endpoint: NEVER returns owner secrets or master credentials
+  app.get('/api/auth/session-token', (req: Request, res: Response) => {
+    const auth = resolveAuth(req);
+    if (!auth.authenticated) {
+      return res.status(401).json({ authenticated: false, token: null, error: 'No active session' });
+    }
+    return res.json({
+      authenticated: true,
+      role: auth.role,
+      isOwner: auth.isOwner,
+      csrfToken: auth.session?.csrfToken,
+    });
+  });
+
+  // Security audit trail route: owner only
+  app.get('/api/security/audit-events', requireAuth, requireOwnerAuth, (_req: Request, res: Response) => {
+    return res.json({
+      success: true,
+      events: sessionService.getRecentAuditEvents(),
+    });
+  });
+
+  // Alias endpoint for active contracts
+  app.get('/api/contracts', (_req: Request, res: Response) => {
+    const state = systemMemoryService.getState() || {};
+    res.json({
+      success: true,
+      activeContracts: state.activeContracts || [],
+    });
+  });
+
   // 1. Security & IP Whitelist Management
   app.get('/api/security/ip-whitelist', (req: Request, res: Response) => {
     const clientIp = trustedIpGuard.getClientIp(req);
@@ -91,15 +234,12 @@ async function startServer() {
   });
 
   // 1b. Production Bridge Parameter Mappings & Telemetry Streaming Endpoints
-  app.get('/api/settings/bridge', (_req: Request, res: Response) => {
+  app.get('/api/settings/bridge', requireAuth, (_req: Request, res: Response) => {
     const memory = systemMemoryService.getState() || {};
     const bridgeConfig = memory.bridgeConfig || {};
-    res.json({
+    const payload = redact({
       success: true,
       bridgeUrl: config.bridgeUrl,
-      bridgeToken: config.bridgeToken,
-      ownerOverrideKey: config.ownerOverrideKey,
-      bridgeTokenMasked: config.bridgeToken ? `${config.bridgeToken.slice(0, 4)}••••••••${config.bridgeToken.slice(-4)}` : '',
       targetRelayIp: '35.242.198.112',
       nginxEdgeProxyPort: 443,
       institutionalRelayLock: true,
@@ -118,16 +258,16 @@ async function startServer() {
         },
         metricB: {
           key: 'V13_BRIDGE_TOKEN',
-          value: config.bridgeToken,
           description: 'High-priority authorization pass token to clear Nginx security wall',
           securityParameter: 'Matches OWNER_OVERRIDE_KEY to prevent 403 Forbidden firewall exceptions',
           status: 'AUTHENTICATED_AND_PASSED',
         },
       },
     });
+    res.json(payload);
   });
 
-  app.post('/api/settings/bridge', (req: Request, res: Response) => {
+  app.post('/api/settings/bridge', requireAuth, requireOwnerAuth, (req: Request, res: Response) => {
     try {
       const { bridgeUrl, bridgeToken, ownerOverrideKey } = req.body;
       if (bridgeUrl && typeof bridgeUrl === 'string') {
@@ -149,8 +289,6 @@ async function startServer() {
         {
           bridgeConfig: {
             bridgeUrl: config.bridgeUrl,
-            bridgeToken: config.bridgeToken,
-            ownerOverrideKey: config.ownerOverrideKey,
             targetRelayIp: '35.242.198.112',
             nginxEdgeProxyPort: 443,
             telemetryStreamingActive: true,
@@ -161,15 +299,13 @@ async function startServer() {
         'Production Bridge Parameter Mappings Updated'
       );
 
-      res.json({
+      res.json(redact({
         success: true,
         message: 'Production Bridge Parameter Mappings successfully applied.',
         bridgeUrl: config.bridgeUrl,
-        bridgeToken: config.bridgeToken,
-        ownerOverrideKey: config.ownerOverrideKey,
         relayIpLock: '35.242.198.112',
         securityWallCleared: true,
-      });
+      }));
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -179,7 +315,12 @@ async function startServer() {
     const url = req.body.bridgeUrl || config.bridgeUrl;
     const token = req.body.bridgeToken || config.bridgeToken;
 
-    const isTokenMatching = Boolean(config.ownerOverrideKey && token === config.ownerOverrideKey);
+    const ownerTokens = [config.ownerOverrideKey, config.ownerApiKey, config.bridgeToken].filter((v) => v && v.length >= 32);
+    const isTokenMatching = Boolean(token && (
+      (ownerTokens.length > 0 && ownerTokens.some((v) => cryptoSafeEqual(token, v))) ||
+      (config.ownerOverrideKey && token === config.ownerOverrideKey) ||
+      (config.bridgeToken && token === config.bridgeToken)
+    ));
     const isUrlValid = Boolean(url && (url.includes('35.242.198') || url.startsWith('http')));
 
     const result = {
@@ -296,12 +437,13 @@ async function startServer() {
   // 2. Health & Bootstrap Telemetry
   app.get('/api/health', (req: Request, res: Response) => {
     const clientIp = trustedIpGuard.getClientIp(req);
+    const dbOnline = Boolean(bootstrapReport?.databaseReadiness?.isReady && bootstrapReport?.databaseMigrations?.success);
     res.json({
       status: 'UP',
       system: 'GPU COMPUTE ARBITRAGE OS v13',
       uptimeSec: Math.floor(process.uptime()),
       bootstrappedAt: bootstrapReport.bootstrappedAt,
-      relationsStatus: '36_SCHEMAS_ONLINE',
+      relationsStatus: dbOnline ? '36_SCHEMAS_ONLINE' : 'DATABASE_UNAVAILABLE',
       binanceGateway: bootstrapReport.binanceStatus.isConnected ? 'CONNECTED' : 'DISCONNECTED',
       securityStatus: {
         enforcementMode: trustedIpGuard.getStatus(clientIp).enforcementMode,
@@ -309,6 +451,16 @@ async function startServer() {
         isTrusted: trustedIpGuard.isIpTrusted(clientIp),
       },
     });
+  });
+
+  app.get('/api/readiness', requireAuth, (_req: Request, res: Response) => {
+    const dbOnline = Boolean(bootstrapReport?.databaseReadiness?.isReady && bootstrapReport?.databaseMigrations?.success);
+    const binanceOnline = Boolean(bootstrapReport?.binanceStatus?.isConnected);
+    const isReady = Boolean(!config.isProduction || (bootstrapReport.envValidated && dbOnline && binanceOnline));
+    if (!isReady) {
+      return res.status(503).json({ ready: false, systemStatus: bootstrapReport.systemStatus });
+    }
+    return res.json({ ready: true, systemStatus: bootstrapReport.systemStatus });
   });
 
   app.get('/api/bootstrap', (_req: Request, res: Response) => {
@@ -483,37 +635,30 @@ async function startServer() {
   });
 
   // 4. Complete System Memory & Exact State Persistence Endpoints
-  app.get('/api/system/memory', (_req: Request, res: Response) => {
+  app.get('/api/system/memory', requireAuth, (_req: Request, res: Response) => {
     try {
       const state = systemMemoryService.getState();
       const diagnostics = systemMemoryService.getDiagnostics();
-      res.json({
+      res.json(redact({
         success: true,
         state,
         diagnostics,
-      });
+      }));
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
 
-  app.post('/api/system/memory/save', (req: Request, res: Response) => {
+  app.post('/api/system/memory/save', requireAuth, requireOwnerAuth, (req: Request, res: Response) => {
     try {
       const { state, reason } = req.body;
       if (!state || typeof state !== 'object') {
         return res.status(400).json({ error: 'Valid state object is required.' });
       }
 
-      // Safeguard: Real verifiable balances from CFO engine must never be clobbered by client mock states
-      const liveBalances = jakeGroveCfoService.getCurrentBalances();
-      if (state.binanceAccount) {
-        state.binanceAccount.usdtBalance = liveBalances.usdtBalance;
-        state.binanceAccount.usdcBalance = liveBalances.usdcBalance;
-        state.binanceAccount.btcBalance = liveBalances.btcBalance;
-        state.binanceAccount.ethBalance = liveBalances.ethBalance;
-        state.binanceAccount.totalEquityUsd = liveBalances.totalEquityUsd;
-        state.binanceAccount.availableMarginUsd = liveBalances.availableMarginUsd;
-        state.binanceAccount.binanceUid = '16863338';
+      // Safeguard: Server-owned binanceAccount cannot be mutated by client memory save
+      if (state.binanceAccount !== undefined) {
+        return res.status(400).json({ error: 'Server-owned state cannot be mutated by client memory save', success: false });
       }
 
       const updated = systemMemoryService.updateState(state, reason || 'Client State Mutation');
@@ -604,23 +749,37 @@ async function startServer() {
     res.json(githubSyncService.getStatus());
   });
 
-  app.post('/api/github/sync', async (_req: Request, res: Response) => {
+  app.post(['/api/github/sync', '/api/github/sync/'], requireAuth, requireOwnerAuth, async (_req: Request, res: Response) => {
+    if (config.isProduction || !config.github.token) {
+      return res.status(503).json({ success: false, error: 'Upstream GitHub sync unavailable' });
+    }
     try {
       const result = await githubSyncService.triggerSync();
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ error: error.message });
+      res.status(503).json({ success: false, error: error.message });
     }
   });
 
-  app.post('/api/github/config', (req: Request, res: Response) => {
+  app.post(['/api/github/config', '/api/github/config/'], requireAuth, requireOwnerAuth, (req: Request, res: Response) => {
+    if (config.isProduction || !config.github.token) {
+      return res.status(503).json({ success: false, error: 'Upstream GitHub configuration locked in production' });
+    }
     const { repo, email, name, token } = req.body;
     const updated = githubSyncService.updateConfig(repo, email, name, token);
-    res.json(updated);
+    res.json({ success: true, ...updated });
+  });
+
+  // Arbitrage Execution Endpoint
+  app.post(['/api/arbitrage/execute', '/api/arbitrage/execute/'], requireAuth, requireOwnerAuth, async (_req: Request, res: Response) => {
+    return res.status(503).json({
+      success: false,
+      error: 'Live execution adapter offline: provider credentials and liquidity locks required',
+    });
   });
 
   // 3. Binance Treasury & Live API Endpoints
-  app.get('/api/binance/account', async (_req: Request, res: Response) => {
+  app.get('/api/binance/account', requireAuth, async (_req: Request, res: Response) => {
     try {
       const status = await jakeGroveCfoService.getAccountStatus();
       // Keep persistent system memory synchronized with real working balances
@@ -648,11 +807,14 @@ async function startServer() {
     }
   });
 
-  app.post('/api/binance/sweep', async (req: Request, res: Response) => {
+  app.post(['/api/binance/sweep', '/api/binance/sweep/'], requireAuth, requireOwnerAuth, async (req: Request, res: Response) => {
     try {
+      if (!config.binance.hasLiveKeys || (config.isProduction && !bootstrapReport.binanceStatus?.isConnected)) {
+        return res.status(503).json({ success: false, error: 'Live Binance exchange connection required' });
+      }
       const amount = Number(req.body.amount) || 0;
       if (amount <= 0) {
-        return res.status(400).json({ error: 'Sweep amount must be greater than zero.' });
+        return res.status(400).json({ success: false, error: 'Sweep amount must be greater than zero.' });
       }
       const result = await jakeGroveCfoService.sweepProfits(amount);
       const curState = systemMemoryService.getState();
@@ -666,11 +828,11 @@ async function startServer() {
       systemMemoryService.updateState({ binanceAccount: updatedAccount }, `Profit Sweep +$${amount} USDT`);
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ error: error.message });
+      res.status(503).json({ success: false, error: error.message });
     }
   });
 
-  app.get('/api/binance/transfers', (_req: Request, res: Response) => {
+  app.get('/api/binance/transfers', requireAuth, (_req: Request, res: Response) => {
     const entries = financialLedger.getAllEntries();
     const transfers = entries
       .filter((e) => ['PROFIT_SWEEP', 'WITHDRAWAL', 'DIRECT_DEPOSIT', 'MARGIN_BORROW', 'MARGIN_REPAY'].includes(e.type))
@@ -689,11 +851,14 @@ async function startServer() {
     res.json(transfers);
   });
 
-  app.post('/api/binance/borrow', async (req: Request, res: Response) => {
+  app.post(['/api/binance/borrow', '/api/binance/borrow/'], requireAuth, requireOwnerAuth, async (req: Request, res: Response) => {
     try {
+      if (!config.binance.hasLiveKeys || (config.isProduction && !bootstrapReport.binanceStatus?.isConnected)) {
+        return res.status(503).json({ success: false, error: 'Live Binance margin facility offline' });
+      }
       const amount = Number(req.body.amount) || 0;
       if (amount <= 0) {
-        return res.status(400).json({ error: 'Borrow amount must be greater than zero.' });
+        return res.status(400).json({ success: false, error: 'Borrow amount must be greater than zero.' });
       }
       const result = await jakeGroveCfoService.borrowMargin(amount);
       const curState = systemMemoryService.getState();
@@ -706,11 +871,11 @@ async function startServer() {
       systemMemoryService.updateState({ binanceAccount: updatedAccount }, `Margin Borrow +$${amount} USDT`);
       res.json(result);
     } catch (error: any) {
-      res.status(400).json({ error: error.message });
+      res.status(503).json({ success: false, error: error.message });
     }
   });
 
-  app.post('/api/binance/toggle-auto-sweep', (_req: Request, res: Response) => {
+  app.post('/api/binance/toggle-auto-sweep', requireAuth, requireOwnerAuth, (_req: Request, res: Response) => {
     const isEnabled = jakeGroveCfoService.toggleAutoSweep();
     const curState = systemMemoryService.getState();
     const updatedAccount = {
@@ -721,17 +886,20 @@ async function startServer() {
     res.json({ autoSweepProfits: isEnabled });
   });
 
-  app.get('/api/binance/deposit-addresses', (_req: Request, res: Response) => {
+  app.get('/api/binance/deposit-addresses', requireAuth, (_req: Request, res: Response) => {
     res.json(jakeGroveCfoService.getDepositAddresses());
   });
 
-  app.post('/api/binance/deposit', async (req: Request, res: Response) => {
+  app.post(['/api/binance/deposit', '/api/binance/deposit/'], requireAuth, requireOwnerAuth, async (req: Request, res: Response) => {
     try {
+      if (!config.binance.hasLiveKeys || (config.isProduction && !bootstrapReport.binanceStatus?.isConnected)) {
+        return res.status(503).json({ success: false, error: 'Live Binance deposit gateway offline' });
+      }
       const amount = Number(req.body.amount) || 1000;
       const network = req.body.network || 'BSC';
       const address = req.body.address;
       if (amount <= 0) {
-        return res.status(400).json({ error: 'Deposit amount must be greater than zero.' });
+        return res.status(400).json({ success: false, error: 'Deposit amount must be greater than zero.' });
       }
       const result = await jakeGroveCfoService.submitDeposit(amount, network, address);
       const curState = systemMemoryService.getState();
@@ -743,17 +911,20 @@ async function startServer() {
       systemMemoryService.updateState({ binanceAccount: updatedAccount }, `Direct Deposit +$${amount} USDT`);
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ error: error.message });
+      res.status(503).json({ success: false, error: error.message });
     }
   });
 
-  app.post('/api/binance/withdraw', async (req: Request, res: Response) => {
+  app.post(['/api/binance/withdraw', '/api/binance/withdraw/'], requireAuth, requireOwnerAuth, async (req: Request, res: Response) => {
     try {
+      if (!config.binance.hasLiveKeys || (config.isProduction && !bootstrapReport.binanceStatus?.isConnected)) {
+        return res.status(503).json({ success: false, error: 'Live Binance withdrawal facility offline' });
+      }
       const amount = Number(req.body.amount) || 0;
       const network = req.body.network || 'BSC';
       const address = req.body.address;
       if (amount <= 0) {
-        return res.status(400).json({ error: 'Withdrawal amount must be greater than zero.' });
+        return res.status(400).json({ success: false, error: 'Withdrawal amount must be greater than zero.' });
       }
       const result = await jakeGroveCfoService.submitWithdrawal(amount, network, address);
 
@@ -796,7 +967,7 @@ async function startServer() {
 
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ error: error.message });
+      res.status(503).json({ success: false, error: error.message });
     }
   });
 
@@ -897,7 +1068,7 @@ async function startServer() {
   });
 
   // 5. Immutable Financial Ledger & GAAP CFO Breakdown Endpoints
-  app.get('/api/ledger/cfo-breakdown', async (_req: Request, res: Response) => {
+  app.get(['/api/ledger/cfo-breakdown', '/api/financial-ledger/summary'], async (_req: Request, res: Response) => {
     try {
       const account = await jakeGroveCfoService.getAccountStatus();
       const breakdown = financialLedger.getCFOBreakdown({
@@ -1020,8 +1191,8 @@ async function startServer() {
       const binanceAcct = await jakeGroveCfoService.getAccountStatus();
       const allStatuses = await providerVerificationService.getAllProviderStatuses(binanceAcct);
 
-      const runpodStatus = allStatuses.find((p) => p.providerId === 'runpod');
-      const lightningStatus = allStatuses.find((p) => p.providerId === 'lightning-ai');
+      const runpodStatus = allStatuses.find((p: ProviderVerificationStatus) => p.providerId === 'runpod');
+      const lightningStatus = allStatuses.find((p: ProviderVerificationStatus) => p.providerId === 'lightning-ai');
 
       const responsePayload = {
         generatedAt: new Date().toISOString(),
@@ -1050,7 +1221,7 @@ async function startServer() {
   });
 
   // Verify RunPod Credentials & Live Balance
-  app.post('/api/providers/verify-runpod', async (req: Request, res: Response) => {
+  app.post('/api/providers/verify-runpod', requireAuth, requireOwnerAuth, async (req: Request, res: Response) => {
     try {
       const { apiKey } = req.body || {};
       const result = await providerVerificationService.verifyRunpod(apiKey);
@@ -1061,7 +1232,7 @@ async function startServer() {
   });
 
   // Verify Lightning AI Credentials & Live Balance
-  app.post('/api/providers/verify-lightning', async (req: Request, res: Response) => {
+  app.post('/api/providers/verify-lightning', requireAuth, requireOwnerAuth, async (req: Request, res: Response) => {
     try {
       const { apiKey } = req.body || {};
       const result = await providerVerificationService.verifyLightning(apiKey);
@@ -1069,6 +1240,51 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
+  });
+
+  // Verify Vast.ai Credentials & Live Balance
+  app.post('/api/providers/verify-vast', requireAuth, requireOwnerAuth, async (req: Request, res: Response) => {
+    try {
+      const { apiKey } = req.body || {};
+      const result = await providerVerificationService.verifyVast(apiKey);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 7. Verified Opportunity Intake Engine (Patch V14)
+  app.get('/api/opportunities/verified', requireAuth, (_req: Request, res: Response) => {
+    res.json({
+      success: true,
+      count: verifiedOpportunityEngine.list().length,
+      opportunities: verifiedOpportunityEngine.list(),
+    });
+  });
+
+  app.post('/api/opportunities/verified/ingest', requireAuth, (req: Request, res: Response) => {
+    try {
+      const opportunity = verifiedOpportunityEngine.ingest(req.body);
+      res.json({ success: true, opportunity });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/opportunities/verified/:id/transition', requireAuth, requireOwnerAuth, (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { nextState, proof } = req.body;
+      const updated = verifiedOpportunityEngine.transition(id, nextState, proof);
+      res.json({ success: true, opportunity: updated });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  // 404 handler for all unmatched API routes (returns JSON 404 rather than SPA HTML)
+  app.all(['/api', '/api/*'], (_req: Request, res: Response) => {
+    res.status(404).json({ error: 'Endpoint not found', code: 'NOT_FOUND' });
   });
 
   // Vite middleware in dev or static files in production

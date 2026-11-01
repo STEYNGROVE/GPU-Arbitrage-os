@@ -1,0 +1,6 @@
+{
+  "name": "GPU Compute Arbitrage OS v13",
+  "description": "High-throughput GPU compute arbitrage operating system, spot-to-contract routing engine, autonomous discovery fleet, and yield management console.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -282,7 +282,7 @@ export const FullSystemAuditModal: React.FC<FullSystemAuditModalProps> = ({
                       </div>
                       <p className="text-xs text-slate-300 leading-relaxed">
                         All 7 primary operating subsystems have verified authentic zero-mock execution parameters.
-                        PostgreSQL 36 relations active, Binance institutional gateway bound to <span className="text-cyan-300 font-mono font-bold">UID 16863338</span>,
+                        PostgreSQL 36 relations active, Binance institutional gateway bound to <span className="text-cyan-300 font-mono font-bold">UID {report.subsystems.binanceTreasury.binanceUid || '1029199926'}</span>,
                         and GitHub sync mapped to <span className="text-cyan-300 font-mono font-bold">STEYNGROVE/GPU-Arbitrage-os</span>.
                       </p>
                     </div>
@@ -580,7 +580,7 @@ export const FullSystemAuditModal: React.FC<FullSystemAuditModalProps> = ({
                       2. Binance CFO Treasury & Multi-Network Addresses
                     </h5>
                     <p className="text-xs text-slate-300">
-                      Real-time institutional liquidity integration bound to master account doppie104@gmail.com (UID: {report.subsystems.binanceTreasury.binanceUid || '16863338'}):
+                      Real-time institutional liquidity integration bound to master account doppie104@gmail.com (UID: {report.subsystems.binanceTreasury.binanceUid || '1029199926'}):
                     </p>
                     <div className="space-y-2 text-xs font-mono">
                       {report.subsystems.binanceTreasury.depositAddresses.map((dep, idx) => (

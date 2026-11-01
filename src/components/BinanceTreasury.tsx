@@ -92,7 +92,7 @@ export const VERIFIED_NETWORKS = [
     network: 'TRC20',
     name: 'Tron (TRC20)',
     badge: 'Global Stablecoin Standard',
-    address: 'TYP5q9G6N1m8xK7uP4bQ9xV3rE4aZ8wQpL',
+    address: 'TXGgg8raiaj9fzeVCzD6oamzmUWqnio6KG',
     expectedArrival: '1-2 mins (12 confirmations)',
     minDeposit: '1.00 USDT',
     minWithdrawal: '1.00 USDT',
@@ -104,7 +104,7 @@ export const VERIFIED_NETWORKS = [
     network: 'BINANCE_PAY',
     name: 'Binance Pay / UID Direct',
     badge: 'Zero-Fee Internal Master UID',
-    address: '16863338',
+    address: '1029199926',
     expectedArrival: 'Instant (Zero-Fee Internal Transfer)',
     minDeposit: '0.01 USDT',
     minWithdrawal: '0.01 USDT',
@@ -573,14 +573,14 @@ export const BinanceTreasury: React.FC<BinanceTreasuryProps> = ({
                   Appointed Binance Capital Guardian Agent
                 </h3>
                 <span className="px-2 py-0.5 text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-600 rounded">
-                  PROTECTING MASTER UID 16863338
+                  PROTECTING MASTER UID {binanceAccount.binanceUid}
                 </span>
                 <span className="px-2 py-0.5 text-[10px] font-mono font-bold bg-cyan-950 text-cyan-300 border border-cyan-700/60 rounded">
                   $0.00 VARIANCE ENFORCED
                 </span>
               </div>
               <p className="text-xs text-slate-300 mt-0.5">
-                Sole mandate: Guarantee 100% of all capital routes strictly to UID 16863338, dynamically pull verified addresses from the API key, and balance capital everywhere down to the exact last cent.
+                Sole mandate: Guarantee 100% of all capital routes strictly to UID {binanceAccount.binanceUid}, dynamically pull verified addresses from the API key, and balance capital everywhere down to the exact last cent.
               </p>
             </div>
           </div>
@@ -590,7 +590,7 @@ export const BinanceTreasury: React.FC<BinanceTreasuryProps> = ({
               onClick={handlePullAddressesFromApi}
               disabled={isPullingDynamicAddresses}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-cyan-200 bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-600/70 rounded-md transition-all cursor-pointer shadow-sm disabled:opacity-50"
-              title="Automatically query Binance REST API for official deposit addresses tied to UID 16863338"
+              title={`Automatically query Binance REST API for official deposit addresses tied to UID ${binanceAccount.binanceUid}`}
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isPullingDynamicAddresses ? 'animate-spin' : ''}`} />
               <span>{isPullingDynamicAddresses ? 'Pulling Addresses...' : 'Pull Addresses from API Key'}</span>
@@ -633,7 +633,7 @@ export const BinanceTreasury: React.FC<BinanceTreasuryProps> = ({
             <span className="text-[10px] text-slate-400 font-mono block">PROTECTED MASTER TARGET</span>
             <span className="text-xs font-bold text-white font-mono flex items-center gap-1.5 mt-0.5">
               <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-              <span>UID: 16863338</span>
+              <span>UID: {binanceAccount.binanceUid}</span>
             </span>
             <span className="text-[10px] text-slate-500 font-mono truncate block">doppie104@gmail.com</span>
           </div>

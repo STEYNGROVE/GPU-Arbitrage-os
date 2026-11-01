@@ -13,6 +13,8 @@ export type TransactionState =
   | 'SUBMITTED'
   | 'PENDING'
   | 'CONFIRMED'
+  | 'SETTLED'
+  | 'REVERSED'
   | 'FAILED'
   | 'REJECTED'
   | 'BLOCKED'
@@ -269,7 +271,9 @@ class FinancialLedgerService {
       CREATED: ['SUBMITTED', 'CONFIRMED', 'REJECTED', 'CANCELLED', 'BLOCKED'],
       SUBMITTED: ['PENDING', 'CONFIRMED', 'FAILED', 'REJECTED', 'BLOCKED'],
       PENDING: ['CONFIRMED', 'FAILED', 'REJECTED', 'CANCELLED', 'BLOCKED'],
-      CONFIRMED: [], // Terminal success
+      CONFIRMED: ['SETTLED', 'REVERSED'],
+      SETTLED: ['REVERSED'],
+      REVERSED: [],
       FAILED: ['SUBMITTED', 'CANCELLED'], // Retriable in specific cases
       REJECTED: [], // Terminal failure
       BLOCKED: ['CANCELLED'], // Blocked terminal/retriable
@@ -328,23 +332,45 @@ class FinancialLedgerService {
     payfastSettledZar?: number;
     gotymeAvailablePhp?: number;
   }): CFOBreakdownSummary {
+    const toCents = (val: number): number => Math.round((val || 0) * 100);
+    const fromCents = (cents: number): number => Number((cents / 100).toFixed(2));
+
     const all = Array.from(this.entries.values());
-    const confirmed = all.filter((e) => e.state === 'CONFIRMED' && !e.isSimulated && e.verificationStatus === 'VERIFIED');
+    const settledOrConfirmed = all.filter(
+      (e) => (e.state === 'CONFIRMED' || e.state === 'SETTLED') && !e.isSimulated && e.verificationStatus === 'VERIFIED'
+    );
     const pending = all.filter((e) => e.state === 'PENDING' || e.state === 'SUBMITTED');
 
-    // Aggregate confirmed customer receipts
-    const customerReceipts = confirmed.filter((e) => e.type === 'CUSTOMER_INVOICE_RECEIPT');
-    const totalReceiptsUsd = customerReceipts
+    // Aggregate confirmed customer receipts (integer-cent precision)
+    const customerReceipts = settledOrConfirmed.filter((e) => e.type === 'CUSTOMER_INVOICE_RECEIPT');
+    const totalReceiptsUsdCents = customerReceipts
       .filter((e) => e.asset === 'USDT' || e.asset === 'USD')
-      .reduce((sum, e) => sum + e.amount, 0);
-    const totalReceiptsZar = customerReceipts
+      .reduce((sum, e) => sum + toCents(e.amount), 0);
+    const totalReceiptsUsd = fromCents(totalReceiptsUsdCents);
+
+    const totalReceiptsZarCents = customerReceipts
       .filter((e) => e.asset === 'ZAR')
-      .reduce((sum, e) => sum + e.amount, 0);
+      .reduce((sum, e) => sum + toCents(e.amount), 0);
+    const totalReceiptsZar = fromCents(totalReceiptsZarCents);
 
     // Aggregate confirmed provider compute expenses
-    const computeExpenses = confirmed.filter((e) => e.type === 'COMPUTE_LEASE_PAYMENT' && ['USD', 'USDT'].includes(e.asset));
-    const totalComputeCostsUsd = computeExpenses.reduce((sum, e) => sum + e.amount, 0);
-    const providerFeesUsd = confirmed.filter(e => ['USD', 'USDT'].includes(e.asset)).reduce((sum, e) => sum + e.fee, 0);
+    const computeExpenses = settledOrConfirmed.filter(
+      (e) => e.type === 'COMPUTE_LEASE_PAYMENT' && ['USD', 'USDT'].includes(e.asset)
+    );
+    const totalComputeCostsUsdCents = computeExpenses.reduce((sum, e) => sum + toCents(e.amount), 0);
+    const totalComputeCostsUsd = fromCents(totalComputeCostsUsdCents);
+
+    const providerFeesUsdCents = settledOrConfirmed
+      .filter((e) => ['USD', 'USDT'].includes(e.asset))
+      .reduce((sum, e) => sum + toCents(e.fee), 0);
+    const providerFeesUsd = fromCents(providerFeesUsdCents);
+
+    const otherAllocatedCostsUsdCents = 0;
+
+    // NET_PROFIT = SETTLED_REVENUE - ACTUAL_PROVIDER_COSTS - TRANSACTION_FEES - OTHER_ALLOCATED_COSTS
+    const netProfitCents = totalReceiptsUsdCents - totalComputeCostsUsdCents - providerFeesUsdCents - otherAllocatedCostsUsdCents;
+    const realisedProfitUsd = fromCents(netProfitCents);
+    const realisedRevenueUsd = totalReceiptsUsd;
 
     // Pending transfers
     const pendingDeposits = pending
@@ -353,10 +379,6 @@ class FinancialLedgerService {
     const pendingWithdrawals = pending
       .filter((e) => e.type === 'WITHDRAWAL')
       .reduce((sum, e) => sum + e.amount, 0);
-
-    // Realised revenue and profit (Strict GAAP recognition: only from confirmed customer receipts minus confirmed expenses)
-    const realisedRevenueUsd = totalReceiptsUsd;
-    const realisedProfitUsd = realisedRevenueUsd - totalComputeCostsUsd - providerFeesUsd;
 
     // External balances check
     const isLiveBinance = Boolean(externalBalances?.binanceIsLive);
@@ -372,7 +394,7 @@ class FinancialLedgerService {
       : 'SIMULATED';
 
     // Internal ledger net balance
-    const internalNetUsd = confirmed.reduce((acc, e) => {
+    const internalNetUsd = settledOrConfirmed.reduce((acc: number, e: LedgerEntry) => {
       if (e.asset === 'USDT' || e.asset === 'USDC' || e.asset === 'USD') {
         return e.debitCredit === 'CREDIT' ? acc + e.amount : acc - e.amount;
       }
@@ -438,7 +460,7 @@ class FinancialLedgerService {
           isLiveBinance
             ? 'Live exchange API reconciliation active. Ledger verified against Binance Spot.'
             : 'Simulated sandbox mode active. Live exchange keys not connected.',
-          `Total audit trail transactions: ${all.length} (${confirmed.length} confirmed, ${pending.length} pending).`,
+          `Total audit trail transactions: ${all.length} (${settledOrConfirmed.length} confirmed, ${pending.length} pending).`,
         ],
       },
     };
