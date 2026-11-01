@@ -9,3 +9,5 @@ tests
 *.log
 .npm
 public/assets/aistudio
+tsx-*
+*.pipe

@@ -34,6 +34,35 @@ import { providerVerificationService, type ProviderVerificationStatus } from './
 
 dotenv.config();
 
+// Ensure TMPDIR points to /tmp to prevent any tsx IPC named pipes from being created in cwd
+if (!process.env.TMPDIR || process.env.TMPDIR === '.' || process.env.TMPDIR.startsWith('./')) {
+  process.env.TMPDIR = '/tmp';
+}
+
+function cleanCwdPipes() {
+  try {
+    const entries = fs.readdirSync(process.cwd());
+    for (const entry of entries) {
+      if (entry.startsWith('tsx-') || entry.endsWith('.pipe')) {
+        const fullPath = path.join(process.cwd(), entry);
+        fs.rmSync(fullPath, { recursive: true, force: true });
+      }
+    }
+  } catch {
+    // Ignore cleanup errors
+  }
+}
+cleanCwdPipes();
+process.on('exit', cleanCwdPipes);
+process.on('SIGINT', () => { cleanCwdPipes(); process.exit(0); });
+process.on('SIGTERM', () => { cleanCwdPipes(); process.exit(0); });
+process.on('unhandledRejection', (reason) => {
+  console.error('[Unhandled Rejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[Uncaught Exception]', err);
+});
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -1290,8 +1319,8 @@ async function startServer() {
   // Vite middleware in dev or static files in production
   const distHtmlPath = path.resolve(__dirname, 'dist', 'index.html');
   const hasDist = fs.existsSync(distHtmlPath);
-  const isProduction = process.env.NODE_ENV === 'production' || hasDist;
-  if (isProduction) {
+  const isProduction = process.env.NODE_ENV === 'production';
+  if (isProduction && hasDist) {
     app.use(express.static(path.resolve(__dirname, 'dist')));
     app.get('*', (_req: Request, res: Response) => {
       res.sendFile(distHtmlPath);
