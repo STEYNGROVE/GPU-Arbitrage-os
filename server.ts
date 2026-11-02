@@ -31,6 +31,7 @@ import {
 import { redact } from './server/redact.ts';
 import { verifiedOpportunityEngine } from './server/verifiedOpportunityEngine.ts';
 import { providerVerificationService, type ProviderVerificationStatus } from './server/providerVerificationService.ts';
+import { chatGptGithubService } from './server/chatgptGithubService.ts';
 
 dotenv.config();
 
@@ -797,6 +798,89 @@ async function startServer() {
     const { repo, email, name, token } = req.body;
     const updated = githubSyncService.updateConfig(repo, email, name, token);
     res.json({ success: true, ...updated });
+  });
+
+  // --- ChatGPT ↔ GitHub Integration Endpoints ---
+  app.get('/api/chatgpt/status', async (req: Request, res: Response) => {
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+    const host = req.headers['x-forwarded-host'] || req.get('host') || `localhost:${PORT}`;
+    const baseUrl = `${protocol}://${host}`;
+    const status = await chatGptGithubService.getStatus(baseUrl);
+    res.json(status);
+  });
+
+  app.get('/api/chatgpt/openapi.json', (req: Request, res: Response) => {
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+    const host = req.headers['x-forwarded-host'] || req.get('host') || `localhost:${PORT}`;
+    const baseUrl = `${protocol}://${host}`;
+    const spec = chatGptGithubService.generateOpenApiSpec(baseUrl);
+    res.setHeader('Content-Type', 'application/json');
+    res.json(spec);
+  });
+
+  app.get('/api/chatgpt/commits', async (req: Request, res: Response) => {
+    const limit = Math.min(Number(req.query.limit) || 10, 25);
+    const commits = await chatGptGithubService.getRecentCommits(limit);
+    res.json({ success: true, count: commits.length, commits });
+  });
+
+  app.get('/api/chatgpt/file', (req: Request, res: Response) => {
+    const filePath = req.query.path as string;
+    if (!filePath) {
+      return res.status(400).json({ success: false, error: 'Query parameter "path" is required.' });
+    }
+    const result = chatGptGithubService.getFileContent(filePath);
+    if (!result.success) {
+      return res.status(404).json(result);
+    }
+    res.json(result);
+  });
+
+  app.get('/api/chatgpt/tree', (_req: Request, res: Response) => {
+    const files = chatGptGithubService.getRepositoryTree();
+    res.json({ success: true, totalFiles: files.length, files });
+  });
+
+  app.get('/api/chatgpt/opportunities', async (_req: Request, res: Response) => {
+    const verified = verifiedOpportunityEngine.list();
+    const benchmarkQuotes = await gpuArbitrageService.getQuotes();
+    res.json({
+      success: true,
+      verifiedCount: verified.length,
+      verifiedOpportunities: verified,
+      benchmarkQuotesCount: benchmarkQuotes.length,
+      benchmarkQuotesSample: benchmarkQuotes.slice(0, 5),
+    });
+  });
+
+  app.post('/api/chatgpt/audit-note', (req: Request, res: Response) => {
+    const { author, category, finding } = req.body || {};
+    if (!author || !finding) {
+      return res.status(400).json({ success: false, error: 'Author and finding are required.' });
+    }
+    const noteId = `AUDIT-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+    systemMemoryService.updateState({}, `[ChatGPT Audit Note] [${category || 'GENERAL'}] ${author}: ${finding}`);
+    res.json({ success: true, id: noteId, timestamp: new Date().toISOString() });
+  });
+
+  app.post('/api/chatgpt/ask', async (req: Request, res: Response) => {
+    const { prompt } = req.body || {};
+    if (!prompt) {
+      return res.status(400).json({ error: 'Prompt is required.' });
+    }
+    try {
+      if (config.groq.hasLiveKey) {
+        const copilotResult = await groqAiService.queryCopilot([{ role: 'user', content: prompt }]);
+        return res.json({ success: true, response: copilotResult.reply, model: config.groq.primaryModel });
+      }
+      return res.json({
+        success: true,
+        response: `Repository connection active for ${chatGptGithubService.getTargetRepo()} on branch main. ChatGPT Action OpenAPI schema available at /api/chatgpt/openapi.json. Query processed in deterministic inspection mode.`,
+        model: 'chatgpt-github-bridge-deterministic',
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Arbitrage Execution Endpoint

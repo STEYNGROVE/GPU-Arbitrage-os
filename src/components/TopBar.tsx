@@ -1,5 +1,5 @@
 import React from 'react';
-import { Terminal, ShieldCheck, Zap, Server, Activity, Sliders, Wallet, Shield, GitBranch, Database } from 'lucide-react';
+import { Terminal, ShieldCheck, Zap, Server, Activity, Sliders, Wallet, Shield, GitBranch, Database, Bot } from 'lucide-react';
 
 interface TopBarProps {
   activeTab: 'spreads' | 'contracts' | 'fleet' | 'calculator' | 'binance' | 'logs';
@@ -15,6 +15,7 @@ interface TopBarProps {
   onOpenSystemMemory?: () => void;
   onOpenPlatformSettings?: () => void;
   onOpenGroqAi?: () => void;
+  onOpenChatGptBridge?: () => void;
   discoveryWorkersCount: number;
   optimizerWorkersCount: number;
   binanceUid?: string;
@@ -34,6 +35,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenSystemMemory,
   onOpenPlatformSettings,
   onOpenGroqAi,
+  onOpenChatGptBridge,
   discoveryWorkersCount,
   optimizerWorkersCount,
   binanceUid,
@@ -173,6 +175,19 @@ export const TopBar: React.FC<TopBarProps> = ({
               <Zap className="w-3.5 h-3.5 text-orange-400 group-hover:scale-125 transition-transform fill-current" />
               <span className="hidden lg:inline">Groq AI (520 T/s)</span>
               <span className="lg:hidden">Groq AI</span>
+            </button>
+          )}
+
+          {onOpenChatGptBridge && (
+            <button
+              onClick={onOpenChatGptBridge}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-200 bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/80 rounded-md transition-all whitespace-nowrap cursor-pointer shadow-sm group hover:shadow-emerald-950/60"
+              title="ChatGPT ↔ GitHub Autonomous Bridge · OpenAPI 3.1.0 Actions"
+            >
+              <Bot className="w-3.5 h-3.5 text-emerald-400 group-hover:scale-125 transition-transform" />
+              <span className="hidden lg:inline">ChatGPT ↔ GitHub</span>
+              <span className="lg:hidden">ChatGPT</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
             </button>
           )}
 

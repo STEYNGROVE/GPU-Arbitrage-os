@@ -45,6 +45,7 @@ import { FullSystemAuditModal } from './components/FullSystemAuditModal';
 import { SystemMemoryModal } from './components/SystemMemoryModal';
 import { PlatformSettingsModal } from './components/PlatformSettingsModal';
 import { GroqAiConsoleModal } from './components/GroqAiConsoleModal';
+import { ChatGptGitHubModal } from './components/ChatGptGitHubModal';
 import { getAuthToken, setAuthToken, authenticatedFetch } from './apiSession';
 
 export const API_AUTH_HEADERS = {
@@ -87,6 +88,7 @@ export default function App() {
   const [isSystemMemoryOpen, setIsSystemMemoryOpen] = useState<boolean>(false);
   const [isPlatformSettingsOpen, setIsPlatformSettingsOpen] = useState<boolean>(false);
   const [isGroqAiOpen, setIsGroqAiOpen] = useState<boolean>(false);
+  const [isChatGptModalOpen, setIsChatGptModalOpen] = useState<boolean>(false);
   const [selectedGroqOpportunity, setSelectedGroqOpportunity] = useState<ArbitrageOpportunity | null>(null);
   const [selectedOpportunity, setSelectedOpportunity] = useState<ArbitrageOpportunity | null>(null);
 
@@ -831,6 +833,7 @@ export default function App() {
         onOpenSystemMemory={() => setIsSystemMemoryOpen(true)}
         onOpenPlatformSettings={() => setIsPlatformSettingsOpen(true)}
         onOpenGroqAi={() => setIsGroqAiOpen(true)}
+        onOpenChatGptBridge={() => setIsChatGptModalOpen(true)}
         discoveryWorkersCount={discoveryWorkers.length}
         optimizerWorkersCount={optimizerWorkers.length}
         binanceUid={binanceAccount.binanceUid}
@@ -974,6 +977,13 @@ export default function App() {
           initialSelectedOpportunity={selectedGroqOpportunity}
           discoveryWorkersCount={discoveryWorkers.length}
           optimizerWorkersCount={optimizerWorkers.length}
+        />
+      )}
+
+      {isChatGptModalOpen && (
+        <ChatGptGitHubModal
+          isOpen={isChatGptModalOpen}
+          onClose={() => setIsChatGptModalOpen(false)}
         />
       )}
 
