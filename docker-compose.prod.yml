@@ -7,7 +7,7 @@ services:
     env_file: .env
     environment:
       NODE_ENV: production
-      SYSTEM_OPERATING_MODE: PRODUCTION
+      SYSTEM_OPERATING_MODE: SIMULATION
       PORT: 3000
       TRUST_PROXY: 172.30.13.0/24
       PGHOST: postgres

@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: gpu-compute-arbitrage-os
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SYSTEM_OPERATING_MODE
+        value: SIMULATION
+      - key: PORT
+        value: 10000
+      - key: PGHOST
+        sync: false
+      - key: PGPORT
+        value: 5432
+      - key: PGDATABASE
+        sync: false
+      - key: PGUSER
+        sync: false
+      - key: PGPASSWORD
+        sync: false
+      - key: PGSSL
+        value: "true"
+      - key: TRUST_PROXY
+        value: "true"
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      - key: PAYFAST_SANDBOX
+        value: "true"
