@@ -1,5 +1,5 @@
 import React from 'react';
-import { Terminal, ShieldCheck, Zap, Server, Activity, Sliders, Wallet, Shield, GitBranch, Database, Bot } from 'lucide-react';
+import { Terminal, ShieldCheck, Zap, Server, Activity, Sliders, Wallet, Shield, GitBranch, Database, Bot, Rocket } from 'lucide-react';
 
 interface TopBarProps {
   activeTab: 'spreads' | 'contracts' | 'fleet' | 'calculator' | 'binance' | 'logs';
@@ -16,6 +16,7 @@ interface TopBarProps {
   onOpenPlatformSettings?: () => void;
   onOpenGroqAi?: () => void;
   onOpenChatGptBridge?: () => void;
+  onOpenDeployHook?: () => void;
   discoveryWorkersCount: number;
   optimizerWorkersCount: number;
   binanceUid?: string;
@@ -36,6 +37,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenPlatformSettings,
   onOpenGroqAi,
   onOpenChatGptBridge,
+  onOpenDeployHook,
   discoveryWorkersCount,
   optimizerWorkersCount,
   binanceUid,
@@ -188,6 +190,19 @@ export const TopBar: React.FC<TopBarProps> = ({
               <span className="hidden lg:inline">ChatGPT ↔ GitHub</span>
               <span className="lg:hidden">ChatGPT</span>
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            </button>
+          )}
+
+          {onOpenDeployHook && (
+            <button
+              onClick={onOpenDeployHook}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-sky-200 bg-sky-950/80 hover:bg-sky-900 border border-sky-500/80 rounded-md transition-all whitespace-nowrap cursor-pointer shadow-sm group hover:shadow-sky-950/60"
+              title="Render Deploy Hook Space · One-click cloud rebuild & deployment without GitHub"
+            >
+              <Rocket className="w-3.5 h-3.5 text-sky-400 group-hover:scale-125 transition-transform" />
+              <span className="hidden lg:inline">Deploy Hook</span>
+              <span className="lg:hidden">Deploy Hook</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse"></span>
             </button>
           )}
 

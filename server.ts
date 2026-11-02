@@ -32,6 +32,7 @@ import { redact } from './server/redact.ts';
 import { verifiedOpportunityEngine } from './server/verifiedOpportunityEngine.ts';
 import { providerVerificationService, type ProviderVerificationStatus } from './server/providerVerificationService.ts';
 import { chatGptGithubService } from './server/chatgptGithubService.ts';
+import { renderDeployService } from './server/renderDeployService.ts';
 
 dotenv.config();
 
@@ -504,6 +505,28 @@ async function startServer() {
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
+  });
+
+  // --- Render Deploy Hook Space Endpoints ---
+  app.get('/api/deploy/hook', (_req: Request, res: Response) => {
+    res.json(renderDeployService.getStatus());
+  });
+
+  app.post('/api/deploy/hook', (req: Request, res: Response) => {
+    const { url } = req.body || {};
+    const result = renderDeployService.setHookUrl(url || '');
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+    res.json({ success: true, ...renderDeployService.getStatus() });
+  });
+
+  app.post('/api/deploy/trigger', async (_req: Request, res: Response) => {
+    const result = await renderDeployService.triggerDeploy();
+    if (!result.success && !result.statusCode) {
+      return res.status(400).json(result);
+    }
+    res.json(result);
   });
 
   // Comprehensive System Reality Audit Endpoint
