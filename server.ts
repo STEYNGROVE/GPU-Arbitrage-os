@@ -5,7 +5,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { bootstrapSystem } from './server/bootstrap.ts';
-import { runSchemaMigrations, getDatabaseDiagnostics } from './server/pgDatabase.ts';
+import { runSchemaMigrations } from './server/pgDatabase.ts';
 import { jakeGroveCfoService } from './server/jakeGroveCfoService.ts';
 import { trustedIpGuard } from './server/trustedIpGuard.ts';
 import { githubSyncService } from './server/githubSyncService.ts';
@@ -503,25 +503,6 @@ async function startServer() {
       res.json(bootstrapReport);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Secure Database Connection Diagnostics (Credentials scrubbed)
-  app.get('/api/database/diagnostics', async (_req: Request, res: Response) => {
-    try {
-      const diagnostics = await getDatabaseDiagnostics();
-      res.json(diagnostics);
-    } catch (err: any) {
-      res.status(500).json({ status: 'ERROR', error: err.message });
-    }
-  });
-
-  app.post('/api/database/migrate', requireAuth, requireOwnerAuth, async (_req: Request, res: Response) => {
-    try {
-      const result = await runSchemaMigrations();
-      res.json(result);
-    } catch (err: any) {
-      res.status(500).json({ success: false, error: err.message });
     }
   });
 

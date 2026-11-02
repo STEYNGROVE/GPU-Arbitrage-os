@@ -17,41 +17,29 @@ let poolInstance: pg.Pool | null = null;
 
 export function getPgPool(): pg.Pool {
   if (!poolInstance) {
-    const connectionString = process.env.DATABASE_URL;
+    if (process.env.RENDER && (!process.env.PGHOST || !process.env.PGPASSWORD || !process.env.PGDATABASE || !process.env.PGUSER)) {
+      throw new Error('PostgreSQL configuration incomplete: PGHOST, PGDATABASE, PGUSER and PGPASSWORD are required on Render');
+    }
     const host = process.env.PGHOST || 'localhost';
+    if (process.env.RENDER && (!process.env.PGHOST || !process.env.PGPASSWORD)) {
+      console.warn('[PostgreSQL Config] PGHOST or PGPASSWORD is missing from the Render web service environment.');
+    }
     const port = Number(process.env.PGPORT) || 5432;
     const database = process.env.PGDATABASE || 'arbitrage_v13';
     const user = process.env.PGUSER || 'postgres';
-    const password = process.env.PGPASSWORD || process.env.DB_PASSWORD || '';
+    const password = process.env.PGPASSWORD || process.env.DB_PASSWORD || 'your_secure_password';
 
-    // Render PostgreSQL requires SSL when connecting externally or in production
-    const isRenderHost = host.includes('render.com') || host.includes('oregon-postgres');
-    const isRemote = host !== 'localhost' && host !== '127.0.0.1' && host !== 'postgres';
-    const requiresSsl = process.env.PGSSL === 'true' || process.env.PGSSLMODE === 'require' || isRenderHost || (process.env.NODE_ENV === 'production' && isRemote);
-
-    const sslConfig = requiresSsl ? { rejectUnauthorized: false } : undefined;
-
-    if (connectionString) {
-      poolInstance = new Pool({
-        connectionString,
-        ssl: sslConfig,
-        max: 10,
-        idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 8000,
-      });
-    } else {
-      poolInstance = new Pool({
-        host,
-        port,
-        database,
-        user,
-        password,
-        ssl: sslConfig,
-        max: 10,
-        idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 8000,
-      });
-    }
+    poolInstance = new Pool({
+      host,
+      port,
+      database,
+      user,
+      password,
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 5000,
+      ssl: process.env.PGSSLMODE === 'require' ? { rejectUnauthorized: true } : undefined,
+    });
 
     poolInstance.on('error', (err) => {
       console.warn('[PostgreSQL Pool Warning]', err.message);
@@ -383,9 +371,8 @@ CREATE TABLE IF NOT EXISTS fleet_orchestration.dead_letter_queue_quarantine (
   originating_worker VARCHAR(64) NOT NULL,
   payload_json TEXT NOT NULL,
   error_message TEXT NOT NULL,
-  quarantined_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
-
 CREATE TABLE IF NOT EXISTS contract_escrows.immutable_financial_ledger (
   id VARCHAR(64) PRIMARY KEY,
   idempotency_key VARCHAR(128) UNIQUE NOT NULL,
@@ -414,9 +401,8 @@ export async function checkDatabaseReadiness(): Promise<{
 }> {
   const startTime = Date.now();
   const database = process.env.PGDATABASE || 'arbitrage_v13';
-  const pool = getPgPool();
-
   try {
+    const pool = getPgPool();
     const client = await pool.connect();
     try {
       await client.query('SELECT 1;');
@@ -433,7 +419,7 @@ export async function checkDatabaseReadiness(): Promise<{
       isReady: false,
       database,
       latencyMs: Date.now() - startTime,
-      error: err.message,
+      error: `PostgreSQL readiness failed (code=${String(err?.code || 'UNKNOWN')})`,
     };
   }
 }
@@ -441,7 +427,6 @@ export async function checkDatabaseReadiness(): Promise<{
 export async function runSchemaMigrations(): Promise<MigrationResult> {
   const startTime = Date.now();
   const database = process.env.PGDATABASE || 'arbitrage_v13';
-  const pool = getPgPool();
 
   const relationsList: Array<{ schema: string; table: string; status: string }> = [
     { schema: 'market_microstructure', table: 'raw_spot_ticks_partitioned', status: 'SYNCHRONIZED' },
@@ -485,6 +470,7 @@ export async function runSchemaMigrations(): Promise<MigrationResult> {
 
   try {
     // Attempt actual migration on PostgreSQL instance
+    const pool = getPgPool();
     const client = await pool.connect();
     try {
       await client.query(SCHEMA_MIGRATIONS_DDL);
@@ -503,7 +489,7 @@ export async function runSchemaMigrations(): Promise<MigrationResult> {
       tables: relationsList,
     };
   } catch (error: any) {
-    console.warn(`[PostgreSQL ⚠️ Connection Notice] PostgreSQL live database connection offline (${error.message}).`);
+    console.warn(`[PostgreSQL] Migration failed: code=${String(error?.code || 'UNKNOWN')}`);
     // Return honest failure result with zero fake relations migrated
     return {
       success: false,
@@ -513,68 +499,7 @@ export async function runSchemaMigrations(): Promise<MigrationResult> {
       appliedAt: new Date().toISOString(),
       executionTimeMs: Date.now() - startTime,
       tables: relationsList.map((t) => ({ ...t, status: 'CONNECTION_FAILED' })),
-      error: error.message,
+      error: `PostgreSQL migration failed (code=${String(error?.code || 'UNKNOWN')})`,
     };
   }
 }
-
-export interface DatabaseDiagnostics {
-  status: 'CONNECTED' | 'DISCONNECTED' | 'STANDBY_LOCAL';
-  isReady: boolean;
-  host: string;
-  port: number;
-  database: string;
-  user: string;
-  passwordConfigured: boolean;
-  sslEnabled: boolean;
-  latencyMs: number;
-  totalSchemas: number;
-  totalRelations: number;
-  pool: {
-    totalCount: number;
-    idleCount: number;
-    waitingCount: number;
-  };
-  error?: string;
-  operatingMode: string;
-  checkedAt: string;
-}
-
-export async function getDatabaseDiagnostics(): Promise<DatabaseDiagnostics> {
-  const readiness = await checkDatabaseReadiness();
-  const pool = getPgPool();
-  const host = process.env.PGHOST || 'localhost';
-  const port = Number(process.env.PGPORT) || 5432;
-  const database = process.env.PGDATABASE || 'arbitrage_v13';
-  const user = process.env.PGUSER || 'postgres';
-  const hasPassword = Boolean(process.env.PGPASSWORD || process.env.DB_PASSWORD);
-  const isRenderHost = host.includes('render.com') || host.includes('oregon-postgres');
-  const isRemote = host !== 'localhost' && host !== '127.0.0.1' && host !== 'postgres';
-  const sslEnabled = process.env.PGSSL === 'true' || process.env.PGSSLMODE === 'require' || isRenderHost || (process.env.NODE_ENV === 'production' && isRemote);
-
-  // Strip any embedded credentials if host was derived from a URL
-  const sanitizedHost = host.replace(/:\/\/.*@/, '://***@');
-
-  return {
-    status: readiness.isReady ? 'CONNECTED' : 'DISCONNECTED',
-    isReady: readiness.isReady,
-    host: sanitizedHost,
-    port,
-    database,
-    user,
-    passwordConfigured: hasPassword,
-    sslEnabled,
-    latencyMs: readiness.latencyMs,
-    totalSchemas: 5,
-    totalRelations: 37,
-    pool: {
-      totalCount: pool.totalCount,
-      idleCount: pool.idleCount,
-      waitingCount: pool.waitingCount,
-    },
-    error: readiness.error,
-    operatingMode: process.env.SYSTEM_OPERATING_MODE || 'SIMULATION',
-    checkedAt: new Date().toISOString(),
-  };
-}
-
