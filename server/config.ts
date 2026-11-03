@@ -57,7 +57,6 @@ export interface AppConfig {
     committerName: string;
   };
   trustedIps: string[];
-  renderDeployHookUrl: string;
 }
 
 function resolveOperatingMode(): OperatingMode {
@@ -160,5 +159,4 @@ export const config: AppConfig = {
     const set = new Set(['127.0.0.1', '::1', '34.96.39.119', '35.242.198.112', ...extracted]);
     return Array.from(set);
   })(),
-  renderDeployHookUrl: process.env.RENDER_DEPLOY_HOOK_URL || '',
 };

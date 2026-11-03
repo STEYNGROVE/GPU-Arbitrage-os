@@ -32,7 +32,6 @@ import { redact } from './server/redact.ts';
 import { verifiedOpportunityEngine } from './server/verifiedOpportunityEngine.ts';
 import { providerVerificationService, type ProviderVerificationStatus } from './server/providerVerificationService.ts';
 import { chatGptGithubService } from './server/chatgptGithubService.ts';
-import { renderDeployService } from './server/renderDeployService.ts';
 
 dotenv.config();
 
@@ -507,28 +506,6 @@ async function startServer() {
     }
   });
 
-  // --- Render Deploy Hook Space Endpoints ---
-  app.get('/api/deploy/hook', (_req: Request, res: Response) => {
-    res.json(renderDeployService.getStatus());
-  });
-
-  app.post('/api/deploy/hook', (req: Request, res: Response) => {
-    const { url } = req.body || {};
-    const result = renderDeployService.setHookUrl(url || '');
-    if (!result.success) {
-      return res.status(400).json(result);
-    }
-    res.json({ success: true, ...renderDeployService.getStatus() });
-  });
-
-  app.post('/api/deploy/trigger', async (_req: Request, res: Response) => {
-    const result = await renderDeployService.triggerDeploy();
-    if (!result.success && !result.statusCode) {
-      return res.status(400).json(result);
-    }
-    res.json(result);
-  });
-
   // Comprehensive System Reality Audit Endpoint
   app.get('/api/system/full-audit', async (_req: Request, res: Response) => {
     try {
@@ -602,17 +579,17 @@ async function startServer() {
             depinFeedsTracked: depinTickers.length,
           },
           microserviceFleet: {
-            status: 'VERIFIED',
-            autonomousDiscoveryCount: 100,
-            yieldOptimizerCount: 50,
-            totalFleetSize: 150,
-            meshTopology: 'Docker Swarm / Compose High-Availability',
-            bellmanFordSolvers: 50,
-            cloudProvidersCrawled: 14,
-            averageScanLatencyMs: 14.2,
+            status: 'NOT_RUNNING',
+            autonomousDiscoveryCount: 0,
+            yieldOptimizerCount: 0,
+            totalFleetSize: 0,
+            meshTopology: 'NOT_VERIFIED',
+            bellmanFordSolvers: 0,
+            cloudProvidersCrawled: 0,
+            averageScanLatencyMs: null,
           },
           githubSyncStack: {
-            status: 'VERIFIED',
+            status: gitStatus.tokenConfigured && gitStatus.syncState === 'SYNCHRONIZED' ? 'VERIFIED' : 'NOT_VERIFIED',
             upstreamRepo: gitStatus.upstreamRepo,
             committerEmail: gitStatus.committerEmail,
             committerName: gitStatus.committerName,
