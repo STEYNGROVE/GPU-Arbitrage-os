@@ -60,29 +60,14 @@ export async function bootstrapSystem(): Promise<BootstrapReport> {
   }
 
   // 2. Real PostgreSQL Database Check & Migrations
-  logLine('[Bootstrap 2/5] Checking PostgreSQL database connectivity...');
+  logLine('[Bootstrap 2/5] Testing PostgreSQL database connection and schema migrations...');
   const dbReadiness = await checkDatabaseReadiness();
-  let migrationResult: MigrationResult;
+  const migrationResult = await runSchemaMigrations();
 
-  if (dbReadiness.isReady) {
-    migrationResult = await runSchemaMigrations();
-    if (migrationResult.success) {
-      logLine(`[Bootstrap 2/5 ✅] Database Connected: ${migrationResult.relationsMigrated} relations verified in ${dbReadiness.database} (${dbReadiness.latencyMs}ms).`);
-    } else {
-      logLine(`[Bootstrap 2/5] Database Connected; migration status: ${migrationResult.error}`);
-    }
+  if (dbReadiness.isReady && migrationResult.success) {
+    logLine(`[Bootstrap 2/5 ✅] Database Connected: ${migrationResult.relationsMigrated} relations verified in ${dbReadiness.database} (${dbReadiness.latencyMs}ms).`);
   } else {
-    migrationResult = {
-      success: false,
-      database: dbReadiness.database,
-      relationsMigrated: 0,
-      totalSchemas: 0,
-      appliedAt: new Date().toISOString(),
-      executionTimeMs: 0,
-      tables: [],
-      error: dbReadiness.error,
-    };
-    logLine(`[Bootstrap 2/5] Storage Engine: Standby Local Storage active (${dbReadiness.error || 'Standby Mode'}).`);
+    logLine(`[Bootstrap 2/5 ⚠️] Database Offline (${dbReadiness.error || 'Connection Failed'}). Standby local storage active.`);
   }
 
   // 3. Binance Gateway & CFO Treasury Init
