@@ -1,0 +1,10 @@
+{
+  "liveInitialBalance": 44.81,
+  "liveCurrentBalance": 44.81,
+  "liveDeployedCapital": 0,
+  "realBankCashBalance": 44.81,
+  "simulatedReserve": 0,
+  "escrowVaultBalance": 0,
+  "treasuryStatus": "VERIFIED_FUNDED",
+  "lastUpdated": "2026-10-09T12:30:00.000Z"
+}

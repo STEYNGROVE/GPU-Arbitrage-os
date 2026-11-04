@@ -1,527 +1,358 @@
 import pg from 'pg';
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
+
 const { Pool } = pg;
 
-export interface MigrationResult {
-  success: boolean;
-  database: string;
-  relationsMigrated: number;
-  totalSchemas: number;
-  appliedAt: string;
-  executionTimeMs: number;
-  tables: Array<{ schema: string; table: string; status: string }>;
-  error?: string;
+export interface PgDatabaseConfig {
+  connectionString?: string;
+  maxConnections?: number;
 }
 
-// Global pool instance to prevent connection leaks across reload
-let poolInstance: pg.Pool | null = null;
+/**
+ * Authoritative PostgreSQL Database Service
+ *
+ * PRODUCTION SCHEMA IMMUTABILITY INVARIANT:
+ * This runtime service NEVER executes DDL schema mutation statements
+ * at startup or during normal operation.
+ * All schema definitions and changes live strictly in versioned PostgreSQL
+ * migration files under `supabase/migrations/` and are applied offline via
+ * `npm run db:migrate`. At startup, `verifySchemaReadiness()` performs a
+ * read-only verification against `information_schema.tables` and fails closed
+ * if any required authoritative financial table is missing.
+ */
+export class PostgresDatabaseService {
+  private pool: pg.Pool | null = null;
+  private isConnected: boolean = false;
+  private connectionError: string | null = null;
+  private isInitialized: boolean = false;
 
-export function getPgPool(): pg.Pool {
-  if (!poolInstance) {
-    if (process.env.RENDER && (!process.env.PGHOST || !process.env.PGPASSWORD || !process.env.PGDATABASE || !process.env.PGUSER)) {
-      throw new Error('PostgreSQL configuration incomplete: PGHOST, PGDATABASE, PGUSER and PGPASSWORD are required on Render');
-    }
-    const host = process.env.PGHOST || 'localhost';
-    if (process.env.RENDER && (!process.env.PGHOST || !process.env.PGPASSWORD)) {
-      console.warn('[PostgreSQL Config] PGHOST or PGPASSWORD is missing from the Render web service environment.');
-    }
-    const port = Number(process.env.PGPORT) || 5432;
-    const database = process.env.PGDATABASE || 'arbitrage_v13';
-    const user = process.env.PGUSER || 'postgres';
-    const password = process.env.PGPASSWORD || process.env.DB_PASSWORD || 'your_secure_password';
-
-    poolInstance = new Pool({
-      host,
-      port,
-      database,
-      user,
-      password,
-      max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 5000,
-      ssl: process.env.PGSSLMODE === 'require' ? { rejectUnauthorized: true } : undefined,
-    });
-
-    poolInstance.on('error', (err) => {
-      console.warn('[PostgreSQL Pool Warning]', err.message);
-    });
+  constructor() {
+    this.configurePool();
   }
-  return poolInstance;
-}
 
-// 36 Schemas and Relations DDL Definitions for PostgreSQL arbitrage_v13
-export const SCHEMA_MIGRATIONS_DDL = `
--- 1. Create Core Schemas
-CREATE SCHEMA IF NOT EXISTS market_microstructure;
-CREATE SCHEMA IF NOT EXISTS hardware_topology;
-CREATE SCHEMA IF NOT EXISTS contract_escrows;
-CREATE SCHEMA IF NOT EXISTS cross_cloud_routing;
-CREATE SCHEMA IF NOT EXISTS fleet_orchestration;
+  private configurePool(overrideUrl?: string) {
+    const rawConnStr = (
+      overrideUrl ||
+      process.env.DATABASE_URL ||
+      process.env.DIRECT_URL ||
+      process.env.SUPABASE_DB_URL ||
+      process.env.POSTGRES_URL ||
+      ''
+    ).trim();
 
--- 2. market_microstructure Relations (6 tables)
-CREATE TABLE IF NOT EXISTS market_microstructure.raw_spot_ticks_partitioned (
-  id BIGSERIAL,
-  provider_id VARCHAR(64) NOT NULL,
-  gpu_model VARCHAR(64) NOT NULL,
-  spot_bid_usd NUMERIC(10, 4) NOT NULL,
-  spot_ask_usd NUMERIC(10, 4) NOT NULL,
-  available_nodes INT DEFAULT 1,
-  recorded_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  PRIMARY KEY (id, recorded_at)
-) PARTITION BY RANGE (recorded_at);
+    if (rawConnStr && (rawConnStr.startsWith('postgres://') || rawConnStr.startsWith('postgresql://'))) {
+      try {
+        const isCloudTlsHost =
+          rawConnStr.includes('.supabase.co') ||
+          rawConnStr.includes('.supabase.com') ||
+          rawConnStr.includes('.neon.tech') ||
+          rawConnStr.includes('sslmode=');
 
-CREATE TABLE IF NOT EXISTS market_microstructure.raw_spot_ticks_default
-  PARTITION OF market_microstructure.raw_spot_ticks_partitioned DEFAULT;
+        // Normalize sslmode=require to include uselibpqcompat=true so pg-connection-string v2/v3 does not emit deprecation warnings
+        let normalizedConnStr = rawConnStr;
+        if (
+          normalizedConnStr.includes('sslmode=require') &&
+          !normalizedConnStr.includes('uselibpqcompat=')
+        ) {
+          normalizedConnStr = normalizedConnStr.replace('sslmode=require', 'uselibpqcompat=true&sslmode=require');
+        }
 
-CREATE TABLE IF NOT EXISTS market_microstructure.orderbook_bids_snapshot (
-  bid_id VARCHAR(64) PRIMARY KEY,
-  buyer_entity VARCHAR(128) NOT NULL,
-  gpu_silicon VARCHAR(64) NOT NULL,
-  max_price_per_hr NUMERIC(10, 4) NOT NULL,
-  required_nodes INT NOT NULL,
-  min_duration_hours INT NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
+        // Strict TLS configuration: verify certificates unless explicitly overridden
+        const sslConfig = process.env.DATABASE_SSL_CA
+          ? { ca: fs.readFileSync(process.env.DATABASE_SSL_CA).toString(), rejectUnauthorized: true }
+          : process.env.DATABASE_SSL === 'true' || isCloudTlsHost
+          ? { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false' }
+          : undefined;
 
-CREATE TABLE IF NOT EXISTS market_microstructure.orderbook_asks_snapshot (
-  ask_id VARCHAR(64) PRIMARY KEY,
-  provider_name VARCHAR(128) NOT NULL,
-  gpu_silicon VARCHAR(64) NOT NULL,
-  spot_rate_per_hr NUMERIC(10, 4) NOT NULL,
-  region VARCHAR(64) NOT NULL,
-  preemption_risk VARCHAR(32) DEFAULT 'LOW',
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
+        this.pool = new Pool({
+          connectionString: normalizedConnStr,
+          max: 15,
+          idleTimeoutMillis: 30000,
+          connectionTimeoutMillis: 8000,
+          ssl: sslConfig
+        });
 
-CREATE TABLE IF NOT EXISTS market_microstructure.spread_arbitrage_candidates (
-  candidate_id VARCHAR(64) PRIMARY KEY,
-  gpu_silicon VARCHAR(64) NOT NULL,
-  buy_provider VARCHAR(64) NOT NULL,
-  sell_counterparty VARCHAR(128) NOT NULL,
-  gross_spread_per_hr NUMERIC(10, 4) NOT NULL,
-  net_spread_per_hr NUMERIC(10, 4) NOT NULL,
-  annualized_apr NUMERIC(10, 2) NOT NULL,
-  status VARCHAR(32) DEFAULT 'DISCOVERED',
-  discovered_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
+        this.pool.on('error', (err) => {
+          console.error('[POSTGRES POOL ERROR]', err.message);
+          this.isConnected = false;
+          this.connectionError = err.message;
+        });
+      } catch (err: any) {
+        console.warn('[POSTGRES INIT ERROR]', err.message);
+        this.connectionError = err.message;
+      }
+    }
+  }
 
-CREATE TABLE IF NOT EXISTS market_microstructure.historical_volatility_bands (
-  gpu_silicon VARCHAR(64) PRIMARY KEY,
-  twap_24h NUMERIC(10, 4) NOT NULL,
-  realized_volatility NUMERIC(8, 4) NOT NULL,
-  spread_z_score NUMERIC(6, 2) NOT NULL,
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
+  public async initialize(options?: { skipSchemaCheck?: boolean }): Promise<{ success: boolean; mode: 'REMOTE_POSTGRES' | 'POSTGRES_DISCONNECTED'; error?: string }> {
+    if (!this.pool) {
+      this.configurePool();
+    }
+    if (this.pool) {
+      try {
+        const client = await this.pool.connect();
+        try {
+          await client.query('SELECT 1 as health');
+          this.isConnected = true;
+          this.connectionError = null;
 
-CREATE TABLE IF NOT EXISTS market_microstructure.synthetic_derivative_curves (
-  curve_id VARCHAR(64) PRIMARY KEY,
-  underlying_gpu VARCHAR(64) NOT NULL,
-  term_days INT NOT NULL,
-  implied_compute_rate NUMERIC(10, 4) NOT NULL,
-  basis_differential NUMERIC(10, 4) NOT NULL,
-  calculated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
+          // Read-only schema readiness verification (zero runtime DDL mutation)
+          if (!options?.skipSchemaCheck) {
+            await this.verifySchemaReadiness(client);
+          }
+          this.isInitialized = true;
+          return { success: true, mode: 'REMOTE_POSTGRES' };
+        } finally {
+          client.release();
+        }
+      } catch (err: any) {
+        console.warn('[POSTGRES CONNECTION FAILED] Primary database connection error:', err.message);
+        // Attempt failover to DIRECT_URL if distinct from DATABASE_URL
+        const directUrl = process.env.DIRECT_URL?.trim();
+        const primaryUrl = process.env.DATABASE_URL?.trim();
+        if (directUrl && directUrl !== primaryUrl && (directUrl.startsWith('postgres://') || directUrl.startsWith('postgresql://'))) {
+          try {
+            this.configurePool(directUrl);
+            if (this.pool) {
+              const fallbackClient = await this.pool.connect();
+              try {
+                await fallbackClient.query('SELECT 1 as health');
+                this.isConnected = true;
+                this.connectionError = null;
+                if (!options?.skipSchemaCheck) {
+                  await this.verifySchemaReadiness(fallbackClient);
+                }
+                this.isInitialized = true;
+                return { success: true, mode: 'REMOTE_POSTGRES' };
+              } finally {
+                fallbackClient.release();
+              }
+            }
+          } catch (fallbackErr: any) {
+            console.warn('[POSTGRES DIRECT_URL FAILOVER FAILED]:', fallbackErr.message);
+          }
+        }
+        this.isConnected = false;
+        this.connectionError = err.message;
+      }
+    }
 
--- 3. hardware_topology Relations (6 tables)
-CREATE TABLE IF NOT EXISTS hardware_topology.gpu_silicon_specs (
-  silicon_id VARCHAR(64) PRIMARY KEY,
-  brand VARCHAR(32) NOT NULL,
-  model_name VARCHAR(128) NOT NULL,
-  architecture VARCHAR(64) NOT NULL,
-  vram_gb INT NOT NULL,
-  memory_bandwidth_tb NUMERIC(6, 2) NOT NULL,
-  fp16_tflops INT NOT NULL,
-  tdp_watts INT NOT NULL,
-  interconnect VARCHAR(64) NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS hardware_topology.pcie_nvlink_matrix (
-  id SERIAL PRIMARY KEY,
-  source_node VARCHAR(64) NOT NULL,
-  gpu_a INT NOT NULL,
-  gpu_b INT NOT NULL,
-  nvlink_gen INT NOT NULL,
-  bi_bandwidth_gb_s INT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS hardware_topology.numa_node_affinities (
-  id SERIAL PRIMARY KEY,
-  server_uuid VARCHAR(64) NOT NULL,
-  numa_socket INT NOT NULL,
-  pcie_root_port VARCHAR(64) NOT NULL,
-  cpu_cores_pinned VARCHAR(64) NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS hardware_topology.infiniband_roce_interfaces (
-  hca_id VARCHAR(64) PRIMARY KEY,
-  adapter_type VARCHAR(64) NOT NULL,
-  speed_gbps INT NOT NULL,
-  lossless_pfc_enabled BOOLEAN DEFAULT TRUE,
-  ecn_marking_enabled BOOLEAN DEFAULT TRUE
-);
-
-CREATE TABLE IF NOT EXISTS hardware_topology.datacenter_pue_thermal_logs (
-  log_id BIGSERIAL PRIMARY KEY,
-  datacenter_code VARCHAR(32) NOT NULL,
-  cooling_type VARCHAR(64) NOT NULL,
-  pue_factor NUMERIC(4, 2) NOT NULL,
-  rack_inlet_celsius NUMERIC(5, 2) NOT NULL,
-  recorded_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS hardware_topology.power_grid_marginal_emissions (
-  grid_iso_code VARCHAR(32) PRIMARY KEY,
-  region_name VARCHAR(64) NOT NULL,
-  power_tariff_per_kwh NUMERIC(6, 4) NOT NULL,
-  clean_energy_percentage NUMERIC(5, 2) NOT NULL,
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- 4. contract_escrows Relations (6 tables)
-CREATE TABLE IF NOT EXISTS contract_escrows.active_leases_ledger (
-  contract_id VARCHAR(64) PRIMARY KEY,
-  gpu_silicon VARCHAR(64) NOT NULL,
-  node_count INT NOT NULL,
-  buy_provider VARCHAR(64) NOT NULL,
-  sell_counterparty VARCHAR(128) NOT NULL,
-  net_hourly_spread NUMERIC(10, 4) NOT NULL,
-  accrued_pnl_usd NUMERIC(12, 2) DEFAULT 0.00,
-  lease_status VARCHAR(32) DEFAULT 'ACTIVE_ROUTING',
-  start_time TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  duration_hours INT NOT NULL,
-  auto_renew BOOLEAN DEFAULT TRUE
-);
-
-CREATE TABLE IF NOT EXISTS contract_escrows.escrow_smart_locks (
-  escrow_id VARCHAR(64) PRIMARY KEY,
-  contract_id VARCHAR(64) REFERENCES contract_escrows.active_leases_ledger(contract_id) ON DELETE CASCADE,
-  locked_capital_usd NUMERIC(12, 2) NOT NULL,
-  collateral_source VARCHAR(64) DEFAULT 'BINANCE_MARGIN',
-  locked_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  settlement_status VARCHAR(32) DEFAULT 'LOCKED'
-);
-
-CREATE TABLE IF NOT EXISTS contract_escrows.slas_uptime_audit_pings (
-  ping_id BIGSERIAL PRIMARY KEY,
-  contract_id VARCHAR(64) NOT NULL,
-  response_time_ms NUMERIC(6, 2) NOT NULL,
-  packet_loss_pct NUMERIC(5, 2) DEFAULT 0.00,
-  sla_breached BOOLEAN DEFAULT FALSE,
-  pinged_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS contract_escrows.preemption_hedge_positions (
-  hedge_id VARCHAR(64) PRIMARY KEY,
-  contract_id VARCHAR(64) NOT NULL,
-  standby_provider VARCHAR(64) NOT NULL,
-  hot_standby_node_id VARCHAR(64) NOT NULL,
-  failover_latency_sec NUMERIC(4, 2) DEFAULT 1.2
-);
-
-CREATE TABLE IF NOT EXISTS contract_escrows.settlement_pnl_records (
-  settlement_id VARCHAR(64) PRIMARY KEY,
-  contract_id VARCHAR(64) NOT NULL,
-  settled_profit_usd NUMERIC(12, 2) NOT NULL,
-  destination_account VARCHAR(64) NOT NULL,
-  settled_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS contract_escrows.counterparty_reputation_scores (
-  counterparty_id VARCHAR(64) PRIMARY KEY,
-  display_name VARCHAR(128) NOT NULL,
-  reputation_score INT DEFAULT 100,
-  total_volume_settled_usd NUMERIC(14, 2) DEFAULT 0.00,
-  default_rate_pct NUMERIC(5, 2) DEFAULT 0.00
-);
-
--- 5. cross_cloud_routing Relations (6 tables)
-CREATE TABLE IF NOT EXISTS cross_cloud_routing.datacenter_rtt_latencies (
-  route_id VARCHAR(64) PRIMARY KEY,
-  source_region VARCHAR(64) NOT NULL,
-  dest_region VARCHAR(64) NOT NULL,
-  mean_rtt_ms NUMERIC(6, 2) NOT NULL,
-  jitter_ms NUMERIC(5, 2) NOT NULL,
-  tested_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS cross_cloud_routing.packet_jitter_sdn_routes (
-  sdn_id VARCHAR(64) PRIMARY KEY,
-  source_asn INT NOT NULL,
-  target_asn INT NOT NULL,
-  optimal_hops INT NOT NULL,
-  packet_drop_rate NUMERIC(6, 4) DEFAULT 0.0001
-);
-
-CREATE TABLE IF NOT EXISTS cross_cloud_routing.bgp_asn_interconnects (
-  asn_id INT PRIMARY KEY,
-  provider_name VARCHAR(64) NOT NULL,
-  ixp_location VARCHAR(64) NOT NULL,
-  peering_capacity_tbps INT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS cross_cloud_routing.wireguard_tunnel_endpoints (
-  tunnel_id VARCHAR(64) PRIMARY KEY,
-  endpoint_ip VARCHAR(45) NOT NULL,
-  public_key VARCHAR(64) NOT NULL,
-  listen_port INT NOT NULL,
-  mtu_bytes INT DEFAULT 1420
-);
-
-CREATE TABLE IF NOT EXISTS cross_cloud_routing.nat_gateway_proxy_relays (
-  relay_id VARCHAR(64) PRIMARY KEY,
-  region VARCHAR(64) NOT NULL,
-  bandwidth_limit_gbps INT NOT NULL,
-  active_sessions INT DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS cross_cloud_routing.geographic_latency_penalties (
-  geo_pair_id VARCHAR(64) PRIMARY KEY,
-  region_a VARCHAR(64) NOT NULL,
-  region_b VARCHAR(64) NOT NULL,
-  incurred_cost_per_hr NUMERIC(6, 4) NOT NULL
-);
-
--- 6. fleet_orchestration Relations (12 tables)
-CREATE TABLE IF NOT EXISTS fleet_orchestration.discovery_fleet_agents (
-  agent_id VARCHAR(64) PRIMARY KEY,
-  container_id VARCHAR(64) NOT NULL,
-  target_provider VARCHAR(64) NOT NULL,
-  offers_crawled_per_sec INT DEFAULT 65,
-  status VARCHAR(32) DEFAULT 'ACTIVE',
-  last_heartbeat TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS fleet_orchestration.yield_optimizer_engines (
-  engine_id VARCHAR(64) PRIMARY KEY,
-  solver_type VARCHAR(64) DEFAULT 'BELLMAN_FORD_GPU',
-  matrix_evals_per_sec INT DEFAULT 850000,
-  status VARCHAR(32) DEFAULT 'ACTIVE',
-  last_heartbeat TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS fleet_orchestration.rpc_distributed_heartbeats (
-  hb_id BIGSERIAL PRIMARY KEY,
-  worker_id VARCHAR(64) NOT NULL,
-  worker_type VARCHAR(32) NOT NULL,
-  latency_ms NUMERIC(6, 2) NOT NULL,
-  cpu_usage_pct NUMERIC(5, 2) NOT NULL,
-  memory_mb INT NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS fleet_orchestration.rate_limit_token_buckets (
-  provider_id VARCHAR(64) PRIMARY KEY,
-  tokens_remaining INT NOT NULL,
-  max_capacity INT NOT NULL,
-  refill_rate_per_sec INT NOT NULL,
-  last_refill TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS fleet_orchestration.api_crawler_fingerprints (
-  fingerprint_id VARCHAR(64) PRIMARY KEY,
-  target_api VARCHAR(64) NOT NULL,
-  user_agent VARCHAR(128) NOT NULL,
-  success_rate_pct NUMERIC(5, 2) DEFAULT 99.8
-);
-
-CREATE TABLE IF NOT EXISTS fleet_orchestration.failover_consensus_quorum (
-  quorum_id VARCHAR(64) PRIMARY KEY,
-  total_votes INT NOT NULL,
-  threshold INT NOT NULL,
-  leader_worker_id VARCHAR(64) NOT NULL,
-  epoch_term INT DEFAULT 1
-);
-
-CREATE TABLE IF NOT EXISTS fleet_orchestration.docker_compose_daemon_state (
-  service_name VARCHAR(64) PRIMARY KEY,
-  replica_count INT NOT NULL,
-  healthy_count INT NOT NULL,
-  restart_policy VARCHAR(32) DEFAULT 'unless-stopped',
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS fleet_orchestration.prometheus_metric_exporters (
-  metric_name VARCHAR(128) PRIMARY KEY,
-  metric_type VARCHAR(32) NOT NULL,
-  current_value NUMERIC(16, 4) NOT NULL,
-  scrape_interval_sec INT DEFAULT 5
-);
-
-CREATE TABLE IF NOT EXISTS fleet_orchestration.ipc_shared_memory_buffers (
-  shm_id VARCHAR(64) PRIMARY KEY,
-  segment_size_bytes BIGINT NOT NULL,
-  mapped_processes INT DEFAULT 150,
-  lock_contention_pct NUMERIC(5, 2) DEFAULT 0.02
-);
-
-CREATE TABLE IF NOT EXISTS fleet_orchestration.kernel_io_uring_rings (
-  ring_id VARCHAR(64) PRIMARY KEY,
-  sqe_depth INT DEFAULT 1024,
-  cqe_overflow_count BIGINT DEFAULT 0,
-  mode VARCHAR(32) DEFAULT 'POLL_SQPOLL'
-);
-
-CREATE TABLE IF NOT EXISTS fleet_orchestration.wal_replication_slots (
-  slot_name VARCHAR(64) PRIMARY KEY,
-  active BOOLEAN DEFAULT TRUE,
-  restart_lsn VARCHAR(32) NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS fleet_orchestration.dead_letter_queue_quarantine (
-  item_id VARCHAR(64) PRIMARY KEY,
-  originating_worker VARCHAR(64) NOT NULL,
-  payload_json TEXT NOT NULL,
-  error_message TEXT NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-CREATE TABLE IF NOT EXISTS contract_escrows.immutable_financial_ledger (
-  id VARCHAR(64) PRIMARY KEY,
-  idempotency_key VARCHAR(128) UNIQUE NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  transaction_type VARCHAR(64) NOT NULL,
-  state VARCHAR(32) NOT NULL,
-  account_type VARCHAR(32) NOT NULL,
-  asset VARCHAR(16) NOT NULL,
-  amount NUMERIC(16, 4) NOT NULL,
-  fee NUMERIC(16, 4) DEFAULT 0,
-  net_amount NUMERIC(16, 4) NOT NULL,
-  debit_credit VARCHAR(16) NOT NULL,
-  provider VARCHAR(64) NOT NULL,
-  provider_tx_id VARCHAR(128),
-  tx_hash VARCHAR(128),
-  is_simulated BOOLEAN DEFAULT FALSE,
-  metadata JSONB
-);
-`;
-
-export async function checkDatabaseReadiness(): Promise<{
-  isReady: boolean;
-  database: string;
-  latencyMs: number;
-  error?: string;
-}> {
-  const startTime = Date.now();
-  const database = process.env.PGDATABASE || 'arbitrage_v13';
-
-  // In sandbox or environments without PGHOST/DATABASE_URL configured, operate in standby without failing
-  if (!process.env.PGHOST && !process.env.DATABASE_URL) {
+    this.isInitialized = true;
+    this.isConnected = false;
     return {
-      isReady: false,
-      database,
-      latencyMs: 0,
-      error: 'Standby local storage active (PGHOST not configured)',
+      success: false,
+      mode: 'POSTGRES_DISCONNECTED',
+      error: this.connectionError || 'DATABASE_URL is not configured or unreachable. LIVE operations are strictly BLOCKED.'
     };
   }
 
-  try {
-    const pool = getPgPool();
-    const client = await pool.connect();
+  /**
+   * Read-only schema readiness check.
+   * Strictly verifies that all authoritative financial tables exist in PostgreSQL
+   * without mutating the database schema at startup or during normal operation.
+   */
+  public async verifySchemaReadiness(client: pg.PoolClient): Promise<void> {
+    const requiredTables = [
+      'schema_migrations',
+      'customers',
+      'customer_api_keys',
+      'customer_sessions',
+      'demand_orders',
+      'webhook_events',
+      'treasury_accounts',
+      'treasury_ledger',
+      'treasury_transactions',
+      'treasury_snapshots',
+      'treasury_reconciliations',
+      'quotes',
+      'capital_reservations',
+      'provider_operations',
+      'provider_instances',
+      'compute_jobs',
+      'settlements',
+      'outbox_events',
+      'audit_events',
+      'idempotency_keys',
+      'reconciliation_runs',
+      'kill_switch_state',
+      'payment_intents',
+      'provider_transactions',
+      'worker_heartbeats',
+      'circuit_breaker_state',
+      'profit_withdrawals_audit',
+      'verified_profit_records',
+      'withdrawal_allowlist',
+      'provider_funding_events',
+      'autonomous_profit_allocations',
+      'hot_wallet_transactions',
+      'hot_wallet_idempotency',
+      'hot_wallet_nonce_state',
+      'hot_wallet_emergency_state',
+      'market_opportunities'
+    ];
+
+    const tableCheckRes = await client.query(
+      `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ANY($1)`,
+      [requiredTables]
+    );
+    const existingTableNames = new Set(tableCheckRes.rows.map((r: any) => r.table_name));
+    for (const reqTable of requiredTables) {
+      if (!existingTableNames.has(reqTable)) {
+        throw new Error(
+          `CRITICAL_SCHEMA_ERROR: Required authoritative table '${reqTable}' is missing. Run 'npm run db:migrate' to apply versioned PostgreSQL migrations before starting LIVE operations.`
+        );
+      }
+    }
+
+    await this.verifyMigrationChecksums(client);
+  }
+
+  /**
+   * Read-only Migration Checksum Integrity Verification.
+   * Ensures every versioned SQL migration in `supabase/migrations/` is recorded in
+   * `schema_migrations` and that `stored checksum === current file checksum`.
+   * Throws `MIGRATION_INTEGRITY_FAILURE` if any applied migration file was modified.
+   */
+  public async verifyMigrationChecksums(
+    clientOverride?: pg.PoolClient,
+    migrationsDirOverride?: string
+  ): Promise<{ verified: boolean; count: number; versions: string[] }> {
+    const migrationsDir = migrationsDirOverride || path.join(process.cwd(), 'supabase', 'migrations');
+    if (!fs.existsSync(migrationsDir)) {
+      throw new Error('MIGRATION_INTEGRITY_FAILURE: supabase/migrations directory is missing.');
+    }
+
+    const files = fs
+      .readdirSync(migrationsDir)
+      .filter(f => f.endsWith('.sql'))
+      .sort();
+
+    const queryFn = clientOverride
+      ? (sql: string, params: any[] = []) => clientOverride.query(sql, params)
+      : (sql: string, params: any[] = []) => this.query(sql, params);
+
+    const existingRes = await queryFn('SELECT version, checksum FROM schema_migrations');
+    const storedMap = new Map<string, string>();
+    for (const row of existingRes.rows) {
+      storedMap.set(String(row.version).trim(), String(row.checksum).trim());
+    }
+
+    const verifiedVersions: string[] = [];
+    for (const file of files) {
+      const version = file.replace(/\.sql$/, '');
+      const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf-8');
+      const currentChecksum = crypto.createHash('sha256').update(sql.trim()).digest('hex');
+
+      const storedChecksum = storedMap.get(version);
+      if (!storedChecksum) {
+        throw new Error(
+          `MIGRATION_INTEGRITY_FAILURE: Versioned migration '${version}' has not been applied to PostgreSQL. Run 'npm run db:migrate' before starting LIVE operations.`
+        );
+      }
+      if (storedChecksum !== currentChecksum) {
+        throw new Error(
+          `MIGRATION_INTEGRITY_FAILURE: Applied financial migration '${version}' checksum mismatch! Stored checksum (${storedChecksum}) !== current file checksum (${currentChecksum}). Startup/deployment refused.`
+        );
+      }
+      verifiedVersions.push(version);
+    }
+
+    return {
+      verified: true,
+      count: verifiedVersions.length,
+      versions: verifiedVersions
+    };
+  }
+
+  public getStatus(): { isConnected: boolean; error: string | null; mode: string; liveExecutionAllowed: boolean } {
+    return {
+      isConnected: this.isConnected,
+      error: this.connectionError,
+      mode: this.isConnected ? 'POSTGRESQL_LIVE' : 'POSTGRES_DISCONNECTED',
+      liveExecutionAllowed: this.isConnected
+    };
+  }
+
+  public isLiveDatabaseConnected(): boolean {
+    return this.isConnected && this.pool !== null;
+  }
+
+  /**
+   * Fail-Closed Outage Test Probe:
+   * Temporarily switches database connectivity flag to simulate an authoritative database drop,
+   * proves that assertLiveModeAllowed() strictly rejects execution with fail-closed reason,
+   * then safely restores previous connection state.
+   */
+  public simulateOutageVerification(): { failClosedEnforced: boolean; reason: string } {
+    const originalConnected = this.isConnected;
     try {
-      await client.query('SELECT 1;');
+      this.isConnected = false;
+      const check = this.assertLiveModeAllowed();
+      const failClosedEnforced = check.allowed === false && typeof check.reason === 'string' && check.reason.includes('LIVE MODE BLOCKED');
       return {
-        isReady: true,
-        database,
-        latencyMs: Date.now() - startTime,
+        failClosedEnforced,
+        reason: check.reason || ''
       };
     } finally {
-      client.release();
+      this.isConnected = originalConnected;
     }
-  } catch (err: any) {
-    return {
-      isReady: false,
-      database,
-      latencyMs: Date.now() - startTime,
-      error: `PostgreSQL connection offline (code=${String(err?.code || 'STANDBY')})`,
-    };
+  }
+
+  /**
+   * Production Safety Requirement:
+   * If PostgreSQL is unavailable, LIVE financial execution is strictly disabled.
+   */
+  public assertLiveModeAllowed(): { allowed: boolean; reason?: string } {
+    if (!this.isConnected || !this.pool) {
+      return {
+        allowed: false,
+        reason: 'LIVE MODE BLOCKED: Authoritative PostgreSQL database is not connected. All live financial operations are strictly disabled.'
+      };
+    }
+    return { allowed: true };
+  }
+
+  /**
+   * Advisory lock on treasury for concurrency serialization
+   */
+  public async acquireTreasuryLock(client: pg.PoolClient): Promise<void> {
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext('arbitrage_treasury_capital_mutex'))`);
+  }
+
+  public async query(sql: string, params: any[] = []): Promise<pg.QueryResult<any>> {
+    if (!this.pool || !this.isConnected) {
+      throw new Error('DATABASE_UNAVAILABLE: PostgreSQL is not connected. Live financial query refused.');
+    }
+    return this.pool.query(sql, params);
+  }
+
+  public async getClient(): Promise<pg.PoolClient> {
+    if (!this.pool || !this.isConnected) {
+      throw new Error('DATABASE_UNAVAILABLE: Cannot acquire transaction client. PostgreSQL is offline.');
+    }
+    return this.pool.connect();
+  }
+
+  public async recordTreasuryDeposit(deposit: {
+    transactionId: string;
+    provider: string;
+    amount: number;
+    currency: string;
+    settlementStatus: string;
+    treasuryReference?: string;
+    accountDestination?: string;
+    rawPayload: any;
+  }): Promise<void> {
+    if (!this.pool || !this.isConnected) return;
+    await this.query(
+      `INSERT INTO webhook_events (provider, event_id, amount, currency, processed_at, raw_payload)
+       VALUES ($1, $2, $3, $4, NOW(), $5)
+       ON CONFLICT (provider, event_id) DO NOTHING`,
+      [deposit.provider, deposit.transactionId, deposit.amount, deposit.currency, JSON.stringify(deposit.rawPayload)]
+    );
   }
 }
 
-export async function runSchemaMigrations(): Promise<MigrationResult> {
-  const startTime = Date.now();
-  const database = process.env.PGDATABASE || 'arbitrage_v13';
-
-  const relationsList: Array<{ schema: string; table: string; status: string }> = [
-    { schema: 'market_microstructure', table: 'raw_spot_ticks_partitioned', status: 'SYNCHRONIZED' },
-    { schema: 'market_microstructure', table: 'orderbook_bids_snapshot', status: 'SYNCHRONIZED' },
-    { schema: 'market_microstructure', table: 'orderbook_asks_snapshot', status: 'SYNCHRONIZED' },
-    { schema: 'market_microstructure', table: 'spread_arbitrage_candidates', status: 'SYNCHRONIZED' },
-    { schema: 'market_microstructure', table: 'historical_volatility_bands', status: 'SYNCHRONIZED' },
-    { schema: 'market_microstructure', table: 'synthetic_derivative_curves', status: 'SYNCHRONIZED' },
-    { schema: 'hardware_topology', table: 'gpu_silicon_specs', status: 'SYNCHRONIZED' },
-    { schema: 'hardware_topology', table: 'pcie_nvlink_matrix', status: 'SYNCHRONIZED' },
-    { schema: 'hardware_topology', table: 'numa_node_affinities', status: 'SYNCHRONIZED' },
-    { schema: 'hardware_topology', table: 'infiniband_roce_interfaces', status: 'SYNCHRONIZED' },
-    { schema: 'hardware_topology', table: 'datacenter_pue_thermal_logs', status: 'SYNCHRONIZED' },
-    { schema: 'hardware_topology', table: 'power_grid_marginal_emissions', status: 'SYNCHRONIZED' },
-    { schema: 'contract_escrows', table: 'active_leases_ledger', status: 'SYNCHRONIZED' },
-    { schema: 'contract_escrows', table: 'escrow_smart_locks', status: 'SYNCHRONIZED' },
-    { schema: 'contract_escrows', table: 'slas_uptime_audit_pings', status: 'SYNCHRONIZED' },
-    { schema: 'contract_escrows', table: 'preemption_hedge_positions', status: 'SYNCHRONIZED' },
-    { schema: 'contract_escrows', table: 'settlement_pnl_records', status: 'SYNCHRONIZED' },
-    { schema: 'contract_escrows', table: 'counterparty_reputation_scores', status: 'SYNCHRONIZED' },
-    { schema: 'contract_escrows', table: 'immutable_financial_ledger', status: 'SYNCHRONIZED' },
-    { schema: 'cross_cloud_routing', table: 'datacenter_rtt_latencies', status: 'SYNCHRONIZED' },
-    { schema: 'cross_cloud_routing', table: 'packet_jitter_sdn_routes', status: 'SYNCHRONIZED' },
-    { schema: 'cross_cloud_routing', table: 'bgp_asn_interconnects', status: 'SYNCHRONIZED' },
-    { schema: 'cross_cloud_routing', table: 'wireguard_tunnel_endpoints', status: 'SYNCHRONIZED' },
-    { schema: 'cross_cloud_routing', table: 'nat_gateway_proxy_relays', status: 'SYNCHRONIZED' },
-    { schema: 'cross_cloud_routing', table: 'geographic_latency_penalties', status: 'SYNCHRONIZED' },
-    { schema: 'fleet_orchestration', table: 'discovery_fleet_agents', status: 'SYNCHRONIZED' },
-    { schema: 'fleet_orchestration', table: 'yield_optimizer_engines', status: 'SYNCHRONIZED' },
-    { schema: 'fleet_orchestration', table: 'rpc_distributed_heartbeats', status: 'SYNCHRONIZED' },
-    { schema: 'fleet_orchestration', table: 'rate_limit_token_buckets', status: 'SYNCHRONIZED' },
-    { schema: 'fleet_orchestration', table: 'api_crawler_fingerprints', status: 'SYNCHRONIZED' },
-    { schema: 'fleet_orchestration', table: 'failover_consensus_quorum', status: 'SYNCHRONIZED' },
-    { schema: 'fleet_orchestration', table: 'docker_compose_daemon_state', status: 'SYNCHRONIZED' },
-    { schema: 'fleet_orchestration', table: 'prometheus_metric_exporters', status: 'SYNCHRONIZED' },
-    { schema: 'fleet_orchestration', table: 'ipc_shared_memory_buffers', status: 'SYNCHRONIZED' },
-    { schema: 'fleet_orchestration', table: 'kernel_io_uring_rings', status: 'SYNCHRONIZED' },
-    { schema: 'fleet_orchestration', table: 'wal_replication_slots', status: 'SYNCHRONIZED' },
-    { schema: 'fleet_orchestration', table: 'dead_letter_queue_quarantine', status: 'SYNCHRONIZED' },
-  ];
-
-  if (!process.env.PGHOST && !process.env.DATABASE_URL) {
-    return {
-      success: false,
-      database,
-      relationsMigrated: 0,
-      totalSchemas: 0,
-      appliedAt: new Date().toISOString(),
-      executionTimeMs: 0,
-      tables: relationsList.map((t) => ({ ...t, status: 'STANDBY_LOCAL' })),
-      error: 'Standby local storage active (PGHOST not configured)',
-    };
-  }
-
-  try {
-    const pool = getPgPool();
-    const client = await pool.connect();
-    try {
-      await client.query(SCHEMA_MIGRATIONS_DDL);
-      console.log(`[PostgreSQL ✅] Database relations verified & migrated in ${database}`);
-    } finally {
-      client.release();
-    }
-
-    return {
-      success: true,
-      database,
-      relationsMigrated: relationsList.length,
-      totalSchemas: 5,
-      appliedAt: new Date().toISOString(),
-      executionTimeMs: Date.now() - startTime,
-      tables: relationsList,
-    };
-  } catch (error: any) {
-    console.info(`[PostgreSQL Standby] Schema migration deferred: code=${String(error?.code || 'STANDBY')}`);
-    return {
-      success: false,
-      database,
-      relationsMigrated: 0,
-      totalSchemas: 0,
-      appliedAt: new Date().toISOString(),
-      executionTimeMs: Date.now() - startTime,
-      tables: relationsList.map((t) => ({ ...t, status: 'STANDBY_LOCAL' })),
-      error: `PostgreSQL migration deferred (code=${String(error?.code || 'STANDBY')})`,
-    };
-  }
-}
+export const pgDbService = new PostgresDatabaseService();
