@@ -62,7 +62,7 @@ async function ready() {
   }
 
   // In test harness or sandbox without DATABASE_URL, allow in-memory storage
-  if (process.env.NODE_ENV === 'test' || process.env.DISABLE_JSON_PERSISTENCE === 'true') {
+  if (process.env.NODE_ENV === 'test' && process.env.DISABLE_JSON_PERSISTENCE === 'true') {
     return;
   }
 
