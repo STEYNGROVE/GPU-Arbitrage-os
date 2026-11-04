@@ -20,6 +20,7 @@ import express from 'express';
 process.env.OWNER_API_KEY = 'test-owner-secret-key-32-bytes-long!';
 
 import { registerCommercialIntake, inMemoryQuoteStore } from '../server/commercialIntake.js';
+import { registerLeadDiscovery, inMemoryLeadsStore, safeFeed } from '../server/leadDiscovery.js';
 import { checkVastConnectivity, checkRunpodConnectivity, getSuppliersConnectivityReport } from '../server/supplierConnectivity.js';
 import { getEffectiveOwnerKey } from '../server/auth.js';
 
@@ -50,6 +51,7 @@ async function runPhase23Suite() {
   });
 
   registerCommercialIntake(app, testRequireOwnerAuth);
+  registerLeadDiscovery(app, testRequireOwnerAuth);
 
   const server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -246,6 +248,95 @@ async function runPhase23Suite() {
       assert.strictEqual(body.error, 'FINANCIAL_EXECUTION_DISABLED_PHASE_2_3');
     }
     console.log('  ✅ PASS: All 8 sensitive financial, provisioning, and trading routes return HTTP 423 blocker');
+
+    // -------------------------------------------------------------
+    // 6. Evidence-Backed Customer Lead Discovery & Safe Triage
+    // -------------------------------------------------------------
+    console.log('\n--- 6. CUSTOMER ACQUISITION & EVIDENCE-BACKED LEAD DISCOVERY ---');
+    // Verify safeFeed helper prevents SSRF
+    assert.strictEqual(safeFeed('http://example.com/rss'), false, 'Non-HTTPS feed rejected');
+    assert.strictEqual(safeFeed('https://localhost/rss'), false, 'Localhost feed rejected');
+    assert.strictEqual(safeFeed('https://127.0.0.1/rss'), false, 'Loopback feed rejected');
+    assert.strictEqual(safeFeed('https://10.0.0.1/rss'), false, 'Private IP feed rejected');
+    assert.strictEqual(safeFeed('https://192.168.1.1/rss'), false, 'Private IP feed rejected');
+    assert.strictEqual(safeFeed('https://public-ai-news.com/feed.xml'), true, 'Public HTTPS feed allowed');
+    console.log('  ✅ PASS: safeFeed strictly rejects non-HTTPS, localhost, and private RFC1918 subnets (anti-SSRF)');
+
+    // Unauthenticated access must fail
+    const unauthDiscRes = await fetch(`${baseUrl}/api/acquisition/discover`, { method: 'POST' });
+    assert.strictEqual(unauthDiscRes.status, 401, 'Anonymous POST /api/acquisition/discover returns 401');
+
+    const unauthLeadsRes = await fetch(`${baseUrl}/api/acquisition/leads`);
+    assert.strictEqual(unauthLeadsRes.status, 401, 'Anonymous GET /api/acquisition/leads returns 401');
+
+    // Authenticated scan with empty feeds returns zero-outreach contract
+    const authDiscRes = await fetch(`${baseUrl}/api/acquisition/discover`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ownerSecret}` }
+    });
+    assert.strictEqual(authDiscRes.status, 200, 'Owner POST /api/acquisition/discover returns 200');
+    const discData = (await authDiscRes.json()) as any;
+    assert.strictEqual(discData.mode, 'DISCOVERY_ONLY', 'Mode is DISCOVERY_ONLY');
+    assert.strictEqual(discData.outreachEnabled, false, 'outreachEnabled=false');
+    assert.strictEqual(discData.purchasingEnabled, false, 'purchasingEnabled=false');
+    console.log('  ✅ PASS: Owner lead discovery executes cleanly with outreachEnabled=false and purchasingEnabled=false');
+
+    // Seed sample lead into in-memory store for triage testing
+    const sampleLeadId = 'sample-gpu-lead-uuid-test';
+    inMemoryLeadsStore.unshift({
+      id: sampleLeadId,
+      title: 'High Performance GPU Cluster Request for LLM Pretraining',
+      source_url: 'https://public-signals.ai/rfp/h100-request-2026',
+      source_feed: 'https://public-signals.ai/feed.atom',
+      discovered_at: new Date().toISOString(),
+      status: 'CANDIDATE'
+    });
+
+    const authLeadsRes = await fetch(`${baseUrl}/api/acquisition/leads`, {
+      headers: { Authorization: `Bearer ${ownerSecret}` }
+    });
+    assert.strictEqual(authLeadsRes.status, 200, 'Owner GET /api/acquisition/leads returns 200');
+    const leadsData = (await authLeadsRes.json()) as any;
+    assert(Array.isArray(leadsData.leads), 'Returns leads array');
+    assert.strictEqual(leadsData.verifiedCustomers, 0, 'Leads are candidates, not customers (verifiedCustomers=0)');
+    assert.strictEqual(leadsData.realizedRevenueUsd, 0, 'Unrealized leads must never report revenue (realizedRevenueUsd=0)');
+    const foundDiscoveredLead = leadsData.leads.find((l: any) => l.id === sampleLeadId);
+    assert(foundDiscoveredLead, 'Seeded lead found');
+    console.log('  ✅ PASS: Lead querying returns verifiedCustomers=0 and realizedRevenueUsd=0');
+
+    // Owner patch status: CANDIDATE -> REVIEWING -> QUALIFIED
+    const patchReviewRes = await fetch(`${baseUrl}/api/acquisition/leads/${sampleLeadId}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${ownerSecret}`
+      },
+      body: JSON.stringify({ status: 'REVIEWING' })
+    });
+    assert.strictEqual(patchReviewRes.status, 200, 'Owner PATCH status to REVIEWING returns 200');
+
+    const patchQualifiedRes = await fetch(`${baseUrl}/api/acquisition/leads/${sampleLeadId}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${ownerSecret}`
+      },
+      body: JSON.stringify({ status: 'QUALIFIED' })
+    });
+    assert.strictEqual(patchQualifiedRes.status, 200, 'Owner PATCH status to QUALIFIED returns 200');
+
+    // Invalid status rejected
+    const patchInvalidRes = await fetch(`${baseUrl}/api/acquisition/leads/${sampleLeadId}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${ownerSecret}`
+      },
+      body: JSON.stringify({ status: 'PURCHASED_GPU_UNAUTHORIZED' })
+    });
+    assert.strictEqual(patchInvalidRes.status, 400, 'Invalid status rejected with 400');
+    console.log('  ✅ PASS: Owner status triage transitions execute cleanly and reject unauthorized mutations');
+
 
   } finally {
     server.close();
