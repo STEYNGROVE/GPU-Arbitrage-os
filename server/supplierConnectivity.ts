@@ -109,7 +109,7 @@ export async function checkVastConnectivity(): Promise<SupplierConnectivityRepor
     }
 
     const userData = (await res.json()) as any;
-    const userId = userData?.id || 'verified_user';
+    if (!userData?.id) throw new Error('Vast.ai authenticated identity missing');
 
     // Query read-only verified offer catalog
     const offersRes = await fetch('https://console.vast.ai/api/v0/bundles/?q=%7B%22verified%22%3A%7B%22eq%22%3Atrue%7D%7D', {
@@ -118,12 +118,12 @@ export async function checkVastConnectivity(): Promise<SupplierConnectivityRepor
     });
 
     let verifiedGpus: VerifiedGpuItem[] = [];
-    let minPrice = 0.25;
-    let maxPrice = 4.50;
+    let minPrice = 0;
+    let maxPrice = 0;
 
     if (offersRes.ok) {
       const bundles = (await offersRes.json()) as any;
-      const list = Array.isArray(bundles?.offers) ? bundles.offers : [];
+      const list = Array.isArray(bundles?.offers) ? bundles.offers.filter((o: any) => Number.isFinite(o?.dph_total) && o.dph_total > 0 && typeof o.gpu_name === 'string') : [];
       if (list.length > 0) {
         verifiedGpus = list.slice(0, 5).map((o: any) => ({
           model: o.gpu_name || 'GPU',
@@ -144,14 +144,12 @@ export async function checkVastConnectivity(): Promise<SupplierConnectivityRepor
       name: 'Vast.ai',
       website: 'https://vast.ai',
       configured: true,
-      status: 'ONLINE',
+      status: verifiedGpus.length > 0 ? 'ONLINE' : 'ERROR',
       lastCheckedAt: timestamp,
-      availableOffersCount: verifiedGpus.length || 1,
+      availableOffersCount: verifiedGpus.length,
       priceRange: { minHourlyPrice: Number(minPrice.toFixed(2)), maxHourlyPrice: Number(maxPrice.toFixed(2)), currency: 'USD' },
-      verifiedGpus: verifiedGpus.length > 0 ? verifiedGpus : [
-        { model: 'RTX 4090', count: 1, hourlyRateUsd: 0.35, location: 'Global' }
-      ],
-      providerError: null,
+      verifiedGpus,
+      providerError: verifiedGpus.length > 0 ? null : 'No verified, priced offers returned by Vast.ai',
       procurementDisabled: true
     };
   } catch (err: any) {
@@ -266,7 +264,7 @@ export async function checkRunpodConnectivity(): Promise<SupplierConnectivityRep
     }
 
     const verifiedGpus: VerifiedGpuItem[] = gpuTypes
-      .filter((g: any) => g.lowestPrice?.uninterruptablePrice > 0)
+      .filter((g: any) => Number.isFinite(g.lowestPrice?.uninterruptablePrice) && g.lowestPrice.uninterruptablePrice > 0)
       .slice(0, 5)
       .map((g: any) => ({
         model: g.displayName || g.id,
@@ -276,20 +274,20 @@ export async function checkRunpodConnectivity(): Promise<SupplierConnectivityRep
       }));
 
     const prices = verifiedGpus.map((g) => g.hourlyRateUsd);
-    const minPrice = prices.length > 0 ? Math.min(...prices) : 0.74;
-    const maxPrice = prices.length > 0 ? Math.max(...prices) : 3.89;
+    const minPrice = prices.length > 0 ? Math.min(...prices) : 0;
+    const maxPrice = prices.length > 0 ? Math.max(...prices) : 0;
 
     return {
       providerId: 'runpod',
       name: 'RunPod',
       website: 'https://runpod.io',
       configured: true,
-      status: 'ONLINE',
+      status: verifiedGpus.length > 0 ? 'ONLINE' : 'ERROR',
       lastCheckedAt: timestamp,
-      availableOffersCount: gpuTypes.length || 1,
+      availableOffersCount: verifiedGpus.length,
       priceRange: { minHourlyPrice: Number(minPrice.toFixed(2)), maxHourlyPrice: Number(maxPrice.toFixed(2)), currency: 'USD' },
       verifiedGpus,
-      providerError: null,
+      providerError: verifiedGpus.length > 0 ? null : 'No verified, priced GPU types returned by RunPod',
       procurementDisabled: true
     };
   } catch (err: any) {
